@@ -32,6 +32,7 @@ class RelayApi(
             .pingInterval(20, TimeUnit.SECONDS)
             .build()
         private val JSON = "application/json".toMediaType()
+        private val EMPTY = "".toRequestBody(null)
     }
 
     @Serializable
@@ -73,6 +74,20 @@ class RelayApi(
     fun markRead(msgId: String) {
         call<Unit>("POST", "/v1/messages/$msgId/read", "".toRequestBody(null), null)
     }
+
+    fun getCall(callId: String): Call = call("GET", "/v1/calls/$callId", null, Call.serializer())
+
+    /** Tells the relay this device is showing the incoming call (measures ring latency). */
+    fun reportRinging(callId: String) {
+        call<Unit>("POST", "/v1/calls/$callId/ringing", EMPTY, null)
+    }
+
+    /** First accept wins; a later one fails with 409 `invalid_state`. */
+    fun acceptCall(callId: String): CallWithJoin = call("POST", "/v1/calls/$callId/accept", EMPTY, CallWithJoin.serializer())
+
+    fun declineCall(callId: String): Call = call("POST", "/v1/calls/$callId/decline", EMPTY, Call.serializer())
+
+    fun endCall(callId: String): Call = call("POST", "/v1/calls/$callId/end", EMPTY, Call.serializer())
 
     fun webSocketRequest(afterSeq: Long): Request {
         val url = "${baseUrl.trimEnd('/')}/v1/ws".toHttpUrl().newBuilder()

@@ -47,6 +47,12 @@ class ConnectionManager : DefaultLifecycleObserver {
         val s = RelaySocket(api, { Graph.messages.lastSeq }, object : RelaySocket.Listener {
             override fun onEvent(event: Event) {
                 if (event is Event.AgentPresence) _agentOnline.value = event.online
+                when (event) {
+                    // The socket may replay an old invite: check it's still ringing first.
+                    is Event.CallInvite -> Graph.calls.onInvite(event, verifyFirst = true)
+                    is Event.CallAnswer, is Event.CallEnd, is Event.CallMissed -> Graph.calls.onCallEvent(event)
+                    else -> Unit
+                }
                 Graph.messages.apply(event, advanceSeq = true)
             }
 

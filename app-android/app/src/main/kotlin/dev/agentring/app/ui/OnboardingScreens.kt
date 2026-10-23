@@ -113,6 +113,7 @@ fun OnboardingFlow(paired: Pairing?, onFinished: () -> Unit) {
                             textAlign = TextAlign.Center,
                         )
                     }
+                    CallReadinessCard()
                     Button(onClick = onFinished, modifier = Modifier.fillMaxWidth().testTag("continue")) {
                         Text(stringResource(R.string.continue_))
                     }

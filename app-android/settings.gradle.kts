@@ -14,6 +14,14 @@ dependencyResolutionManagement {
     repositories {
         if (!coreOnly) google()
         mavenCentral()
+        if (!coreOnly) {
+            // LiveKit's fork of Twilio audioswitch is only published on JitPack.
+            // Scoped to that one module so JitPack can't serve anything else.
+            exclusiveContent {
+                forRepository { maven("https://jitpack.io") }
+                filter { includeModule("com.github.davidliu", "audioswitch") }
+            }
+        }
     }
 }
 

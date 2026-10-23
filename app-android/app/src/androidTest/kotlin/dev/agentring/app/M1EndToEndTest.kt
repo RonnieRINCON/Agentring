@@ -11,6 +11,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.core.app.RemoteInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -126,7 +127,8 @@ class M1EndToEndTest {
         waitForTag("continue", timeoutMs = 20_000)
         screenshot("02-paired")
         val pairing = assertNotNull_(Graph.pairing.current)
-        compose.onNodeWithTag("continue").performClick()
+        // The call-readiness checklist sits above the button, so it may be off screen.
+        compose.onNodeWithTag("continue").performScrollTo().performClick()
 
         // 2. Home shows a live connection to the relay.
         waitForTag("relay_status", context.getString(R.string.connected), timeoutMs = 20_000)

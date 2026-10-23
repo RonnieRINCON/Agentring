@@ -44,6 +44,14 @@ object PushHandler {
                     Outcome.Applied
                 }
             }
+            is Event.CallInvite -> {
+                Graph.calls.onInvite(event)
+                Outcome.Applied
+            }
+            is Event.CallAnswer, is Event.CallEnd, is Event.CallMissed -> {
+                Graph.calls.onCallEvent(event)
+                Outcome.Applied
+            }
             else -> {
                 Graph.messages.apply(event, advanceSeq = false)
                 Outcome.Applied

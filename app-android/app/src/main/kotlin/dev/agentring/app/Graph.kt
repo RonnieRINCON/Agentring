@@ -2,6 +2,8 @@ package dev.agentring.app
 
 import android.app.Application
 import android.os.Build
+import dev.agentring.app.call.CallManager
+import dev.agentring.app.data.AppSettings
 import dev.agentring.app.data.MessageRepository
 import dev.agentring.app.data.Pairing
 import dev.agentring.app.data.PairingStore
@@ -27,6 +29,8 @@ object Graph {
     val messages: MessageRepository by lazy { MessageRepository(app) }
     val push: PushRegistrar by lazy { PushRegistrar(app) }
     val connection: ConnectionManager by lazy { ConnectionManager() }
+    val settings: AppSettings by lazy { AppSettings(app) }
+    val calls: CallManager by lazy { CallManager(app) }
 
     val userAgent: String get() = "agentring-android/${BuildConfig.VERSION_NAME} (Android ${Build.VERSION.RELEASE})"
 

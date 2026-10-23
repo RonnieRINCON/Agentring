@@ -101,6 +101,37 @@ data class Status(
 )
 
 @Serializable
+data class Call(
+    @SerialName("call_id") val callId: String,
+    val direction: String,
+    val state: String,
+    val reason: String? = null,
+    val priority: String,
+    @SerialName("agent_name") val agentName: String,
+    @SerialName("created_at") val createdAt: Long,
+    @SerialName("answered_at") val answeredAt: Long? = null,
+    @SerialName("ended_at") val endedAt: Long? = null,
+    @SerialName("ended_by") val endedBy: String? = null,
+    @SerialName("end_reason") val endReason: String? = null,
+    @SerialName("duration_ms") val durationMs: Long? = null,
+    @SerialName("device_id") val deviceId: String? = null,
+) {
+    val isRinging: Boolean get() = state == "ringing"
+}
+
+@Serializable
+data class JoinInfo(
+    @SerialName("livekit_url") val livekitUrl: String,
+    @SerialName("livekit_token") val livekitToken: String,
+    val room: String,
+    val identity: String,
+    @SerialName("expires_at") val expiresAt: Long,
+)
+
+@Serializable
+data class CallWithJoin(val call: Call, val join: JoinInfo)
+
+@Serializable
 data class ApiErrorBody(val error: Detail) {
     @Serializable
     data class Detail(val code: String, val message: String)

@@ -33,6 +33,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -165,6 +166,8 @@ private fun HomeScreen(pairing: Pairing) {
             }
         }
 
+        if (!rememberCallsReady()) CallReadinessCard()
+
         Spacer(Modifier.height(8.dp))
         Button(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth().height(56.dp)) {
             Icon(Icons.Filled.Call, null)
@@ -198,6 +201,24 @@ private fun SettingsScreen(pairing: Pairing) {
         InfoRow(stringResource(R.string.settings_agent), pairing.agentName)
         InfoRow(stringResource(R.string.settings_device), pairing.deviceId)
         InfoRow(stringResource(R.string.settings_version), BuildConfig.VERSION_NAME)
+        HorizontalDivider()
+        Text(stringResource(R.string.settings_calls), style = MaterialTheme.typography.titleMedium)
+        CallReadinessCard()
+        var useTelecom by remember { mutableStateOf(Graph.settings.useTelecom) }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(stringResource(R.string.settings_use_telecom), style = MaterialTheme.typography.bodyLarge)
+                Text(stringResource(R.string.settings_use_telecom_hint), style = MaterialTheme.typography.bodySmall)
+            }
+            Switch(
+                checked = useTelecom,
+                onCheckedChange = {
+                    useTelecom = it
+                    Graph.settings.useTelecom = it
+                },
+                modifier = Modifier.testTag("use_telecom"),
+            )
+        }
         HorizontalDivider()
         OutlinedButton(
             onClick = { Notifications.showTest(ctx) },

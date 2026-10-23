@@ -21,6 +21,24 @@ object RelayUrlPolicy {
         }
     }
 
+    /**
+     * Same rule for the LiveKit URL the relay hands out on accept: it carries the
+     * call's join token, so it must be wss:// unless the server is on a private network.
+     */
+    fun checkLiveKit(url: String) {
+        val uri = try {
+            URI(url)
+        } catch (e: Exception) {
+            throw IllegalArgumentException("Invalid LiveKit URL")
+        }
+        val host = uri.host ?: throw IllegalArgumentException("Invalid LiveKit URL")
+        when (uri.scheme) {
+            "wss", "https" -> Unit
+            "ws", "http" -> require(isPrivateHost(host)) { "LiveKit must use wss:// (ws is only allowed on a local network)" }
+            else -> throw IllegalArgumentException("Invalid LiveKit URL scheme")
+        }
+    }
+
     fun isPrivateHost(host: String): Boolean {
         val h = host.lowercase().trim('[', ']')
         if (h == "localhost" || h.endsWith(".local") || h == "::1") return true

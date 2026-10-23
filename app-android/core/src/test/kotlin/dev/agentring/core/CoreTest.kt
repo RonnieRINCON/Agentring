@@ -83,6 +83,34 @@ class CoreTest {
     }
 
     @Test
+    fun `livekit url must be wss outside a private network`() {
+        RelayUrlPolicy.checkLiveKit("wss://relay.example.com")
+        RelayUrlPolicy.checkLiveKit("ws://localhost:7880")
+        RelayUrlPolicy.checkLiveKit("ws://192.168.1.10:7880")
+        for (bad in listOf("ws://relay.example.com", "http://8.8.8.8", "ftp://x", "not a url")) {
+            try {
+                RelayUrlPolicy.checkLiveKit(bad)
+                fail("accepted $bad")
+            } catch (e: IllegalArgumentException) {
+                // expected
+            }
+        }
+    }
+
+    @Test
+    fun `call join info decodes`() {
+        val j = ProtocolJson.decodeFromString(
+            CallWithJoin.serializer(),
+            """{"call":{"call_id":"call_1","direction":"agent_to_user","state":"active","priority":"urgent","agent_name":"Claude",
+               "created_at":1,"answered_at":2,"device_id":"dev_1","extra":true},
+               "join":{"livekit_url":"wss://r","livekit_token":"t","room":"call_1","identity":"device_dev_1","expires_at":3}}""",
+        )
+        assertEquals("active", j.call.state)
+        assertFalse(j.call.isRinging)
+        assertEquals("wss://r", j.join.livekitUrl)
+    }
+
+    @Test
     fun `relay api speaks the protocol`() {
         MockWebServer().use { server ->
             server.enqueue(
