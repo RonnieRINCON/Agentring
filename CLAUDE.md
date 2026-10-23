@@ -1,0 +1,127 @@
+# agentring — notes for Claude Code sessions
+
+Open-source project (Apache-2.0) that lets any AI agent (Claude Code, OpenClaw,
+n8n, scripts) **call the user's phone over VoIP and message it**, and lets the
+user call the agent back. The phone must ring like a real call when locked. No
+PSTN, no numbers, no Twilio. F1 scope: one user, one agent, Android only,
+self-hosted, no accounts.
+
+## Working agreement with the user (important)
+
+- The user writes in **Spanish**; answer in Spanish. **Code, comments, docs and
+  README in English.**
+- Work **milestone by milestone (M1→M5)**. At the end of each milestone: stop,
+  explain how to test it, and **wait for the user's OK** before starting the next.
+- **Ask before deviating** from the design in `docs/architecture.md` /
+  `docs/protocol.md`. Record accepted deviations there.
+- The protocol contract is `protocol/relay.openapi.yaml` (single source of
+  truth). Change it first, then the implementations, and keep
+  `protocol/examples/` fixtures valid.
+- Develop on branch `claude/agentring-voip-calls-l4ei3s` (currently also the
+  repo's default branch). Commit with clear messages; don't open PRs unless asked.
+
+## Status
+
+| Milestone | Scope | Status |
+|---|---|---|
+| **M1** | relay + pairing + messages + push | **Done, CI-verified on an emulator. Waiting for the user to test on a real phone and give the OK.** |
+| M2 | phone rings locked / Doze in < 5 s with native call UI; audio (echo/tone is fine) | next |
+| M3 | Gemini Live conversation (< 1 s turns), OpenAI Realtime optional; `consult_agent` with `backend: command` | |
+| M4 | call the agent from the app; missed/declined fallbacks | |
+| M5 | MCP server, skill, examples, docs, < 15 min quickstart with `docker compose up` | |
+
+Open items before M2: the user has `agentring.apk` and
+`scripts/device-test.sh` (local relay + `adb reverse` + guided or instrumented
+test on a USB phone). FCM delivery to a real phone has never been tested (needs
+the user's Firebase project, see `docs/firebase.md`).
+
+## Repository layout
+
+```
+protocol/       relay.openapi.yaml (REST + event schemas), examples/ (event fixtures, push signature vector)
+relay/          TypeScript, Fastify 5, node:sqlite (no native deps), jose; FCM HTTP v1 without firebase-admin
+daemon/         Python ≥3.11 + uv; `agentring` CLI (typer), local SQLite mirror synced from the relay
+app-android/    :core = pure Kotlin/JVM (protocol models, PushVerifier, RelayApi, RelaySocket)
+                :app  = Compose/Material 3 app, package dev.agentring.app, minSdk 26, targetSdk 35
+deploy/         docker-compose.yml (caddy + relay; LiveKit to be added in M2), Caddyfile, .env.example
+scripts/        ci-emulator-e2e.sh, device-test.sh
+docs/           architecture.md, protocol.md, setup.md, firebase.md
+.github/        workflows/ci.yml (relay+daemon tests, compose smoke), workflows/android.yml (APK + emulator e2e + release)
+```
+
+Still to create: `skills/agentring/SKILL.md`, `examples/` (claude-code, openclaw,
+n8n), `docs/troubleshooting-oem.md`, daemon Dockerfile/compose profile.
+
+## Build and test
+
+```bash
+cd relay  && npm ci && npm run typecheck && npm test && npm run build   # 18 tests
+cd daemon && uv run pytest -q          # needs relay/dist (e2e against the real relay)
+cd app-android && ./gradlew :core:test :app:assembleDebug
+cd app-android && ./gradlew -PcoreOnly :core:test   # when Google's Maven is unreachable
+```
+
+CI (`.github/workflows/android.yml`) builds the APK, starts a relay, boots an
+API 34 emulator, runs `M1EndToEndTest` (pair via UI → WS message → read receipt
+→ reply in app → signed push → notification inline reply), checks
+`agentring replies`, uploads screenshots, and replaces the `android-preview`
+pre-release with `agentring.apk`.
+
+Local real-phone test: `scripts/device-test.sh [apk]` or `--instrumented`.
+
+## Key design decisions (all accepted by the user)
+
+- Commands are REST; events flow over a resumable WebSocket (`/v1/ws?after_seq=`)
+  from a persisted event log with a global `seq`; FCM carries only what must wake
+  the phone.
+- LiveKit tokens are **not** in `call.invite`; the callee gets them from
+  `POST /v1/calls/{id}/accept` (first accept wins). The caller gets its own in the
+  `POST /v1/calls` response.
+- FCM data payloads are signed: `sig = HMAC-SHA256(push_secret, event_json)` plus
+  `relay_id`; the app rejects anything else.
+- **Firebase is configured at runtime**: the relay reads the user's
+  `google-services.json` and returns `push_config` in the pair response, so one
+  prebuilt APK works with anyone's Firebase project.
+- Extra call state `canceled` and informational event `call.ringing`; one call at
+  a time (`409 busy`); multiple devices ring, first accept wins.
+- Auth: daemon uses an `ak_…` API key (generated on first relay start, stored in
+  `DATA_DIR/api_key`); devices use a long-lived HS256 `device_jwt` checked
+  against the DB on every request (immediate revocation, WS closed with 4401).
+- The app accepts `http://` relays only on private/LAN/localhost hosts
+  (`RelayUrlPolicy`); everything else must be https.
+- Debug keystore `app-android/app/debug.keystore` is committed on purpose so CI
+  builds install over each other. A real release key is still TODO.
+- M3: `consult_agent` command backend must take an **argv list**, never a shell
+  string (the task text comes from the voice model).
+- M2 plan: one hostname, Caddy routes `/v1/*` → relay and `/rtc*`, `/twirp*` → LiveKit.
+
+## Environment gotchas
+
+- **Cloud sessions** (claude.ai/code) cannot reach `dl.google.com` /
+  `maven.google.com`, so the Android app can't be built there. Use the
+  `-PcoreOnly` build locally and let GitHub Actions build/test the app (read logs
+  with the GitHub MCP tools; artifacts/release assets can be fetched via
+  `gh api -H "Accept: application/octet-stream" repos/mutonby/agentring/releases/assets/<id>`).
+  A cloud session also cannot see a USB phone; for that the user runs Claude Code
+  on their own computer.
+- An Android SDK was unpacked to `/opt/android-sdk` in one cloud session (from the
+  `cimg/android` Docker image); it does not persist across sessions.
+- Docker builds inside the cloud sandbox can't reach npm; the compose stack is
+  verified by the `deploy-smoke` CI job instead.
+- `ubuntu-latest` runners need disk freed for the emulator (already in the workflow).
+
+## What M2 needs (from the original spec)
+
+- Relay: calls endpoints (already in the OpenAPI), ring timer (30 s → `call.missed`),
+  LiveKit room + per-call tokens (TTL 120 s, one room), LiveKit webhook, FCM push of
+  `call.invite` (TTL = until `expires_at`) and of accept/decline/end/missed for ringing calls.
+- Daemon: `agentring call "reason" [--urgent] [--wait]`, voice worker (LiveKit Agents)
+  joining the room — echo/tone is enough for M2.
+- App: self-managed `ConnectionService` + `PhoneAccount` (`MANAGE_OWN_CALLS`), CallStyle
+  notification with full-screen intent, Android 14+ FSI declaration, urgent priority →
+  alarm stream + bypass DnD when policy access granted, LiveKit Android SDK audio,
+  active-call screen (mute, speaker, hang up), full onboarding (notifications, mic,
+  FSI, DnD, battery optimisation with Xiaomi/Samsung/Huawei instructions, test call).
+- Acceptance: phone locked, screen off, 10 min in Doze → `agentring call "test"` rings
+  in < 5 s with native call UI, answer, audio works.
+- Deploy: add livekit-server to compose (UDP 50000–60000, TCP 7881).
