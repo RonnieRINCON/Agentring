@@ -1,0 +1,1 @@
+{"type":"call.invite","id":"evt_01JB0000000000000000000001","ts":1761200000000,"seq":41,"call_id":"call_01JB0000000000000000000002","direction":"agent_to_user","agent_name":"Claude","reason":"Deploy to prod is ready, need your go/no-go","priority":"urgent","expires_at":1761200030000}

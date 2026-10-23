@@ -1,0 +1,233 @@
+# Protocol (v1)
+
+> Status: **proposal for M1 review**. The normative definition is
+> [`protocol/relay.openapi.yaml`](../protocol/relay.openapi.yaml); this document
+> explains the flows.
+
+## Principals and authentication
+
+| Principal | Credential | Header |
+|---|---|---|
+| **agent** (the daemon) | API key `ak_…` (random 32 bytes, base64url) | `Authorization: Bearer ak_…` |
+| **device** (the phone) | `device_jwt` (HS256, `iss`=`relay_id`, `sub`=`device_id`, `aud`=`device`) | `Authorization: Bearer eyJ…` |
+| LiveKit server | LiveKit webhook signature | `Authorization: <livekit jwt>` |
+
+The relay tells credentials apart by prefix (`ak_`) vs JWT shape. TLS is
+mandatory in production; the relay refuses to start with a non-`https` public
+URL unless `AGENTRING_INSECURE_DEV=1`.
+
+Every device request re-checks the device row, so `DELETE /v1/devices/{id}`
+revokes immediately (REST returns 401, open WebSockets are closed with code
+4401).
+
+## Identifiers and time
+
+- IDs are prefixed ULIDs (lexicographically sortable): `dev_…`, `call_…`,
+  `msg_…`, `evt_…`. The relay itself has a `relay_id` (`rly_…`) generated on
+  first start.
+- All timestamps are **integer milliseconds since the Unix epoch (UTC)**.
+
+## Events
+
+Every event is a flat JSON object:
+
+```json
+{ "type": "msg.new", "id": "evt_01JB…", "ts": 1761200000000, "seq": 42,
+  "msg_id": "msg_01JB…", "from": "agent", "text": "Build finished ✅" }
+```
+
+| Field | Meaning |
+|---|---|
+| `type` | discriminator (below) |
+| `id` | unique event id; clients de-duplicate on it (an event can arrive by FCM *and* WS) |
+| `ts` | creation time, ms |
+| `seq` | position in the relay's event log (monotonic, global, may have gaps per principal). Absent on ephemeral events. |
+
+### Catalogue
+
+| `type` | Payload | Persisted | Emitted when |
+|---|---|---|---|
+| `call.invite` | `call_id, direction, agent_name, reason, priority, expires_at` | ✓ | a call is created; addressed to the callee side |
+| `call.ringing` | `call_id, device_id` | ✓ | a device shows the incoming call UI |
+| `call.accept` | `call_id, by, device_id?` | ✓ | callee accepted (first accept wins) |
+| `call.decline` | `call_id, by, device_id?` | ✓ | callee declined |
+| `call.end` | `call_id, by, reason, duration_ms?` | ✓ | either side hung up, caller canceled while ringing, or LiveKit closed the room |
+| `call.missed` | `call_id` | ✓ | no answer after `RING_TIMEOUT_S` (default 30) |
+| `msg.new` | `msg_id, from, text, reply_to?, truncated?` | ✓ | a message was posted |
+| `msg.read` | `msg_id, by` | ✓ | the other side read it |
+| `agent.presence` | `online` | ✗ | daemon WS connected / disconnected (devices only) |
+| `ws.hello` | `relay_id, last_seq, server_ts` | ✗ | first frame on every WebSocket |
+
+- `direction`: `agent_to_user` (agent calls phone) or `user_to_agent`.
+- `priority`: `normal` | `urgent`. Urgent = alarm stream + bypass DnD if the
+  user granted policy access.
+- `by`: `agent` | `user` | `relay` (relay = timeout / room closed).
+- `call.end.reason`: `hangup` | `canceled` | `room_closed` | `error`.
+- `expires_at` on `call.invite`: the app must not ring after this time (late
+  FCM delivery).
+- `msg.new.truncated` is only ever `true` inside a push payload (FCM data is
+  capped at 4 KB); the app then fetches `GET /v1/messages/{msg_id}`.
+
+## Transport
+
+### REST (commands)
+
+All mutations are REST calls (see OpenAPI). Errors have the shape
+`{"error": {"code": "busy", "message": "…"}}`.
+
+`POST /v1/messages` accepts an optional `client_msg_id`; retries with the same
+value return the original message (idempotency for flaky mobile networks).
+
+### WebSocket (event stream)
+
+`GET /v1/ws?after_seq=<n>` with the usual `Authorization` header.
+
+1. Server sends `ws.hello`.
+2. Server replays every persisted event visible to the principal with
+   `seq > after_seq`, then streams live events.
+3. Client → server frames are not used in v1 (keepalive via WS ping/pong every
+   20 s; the relay drops sockets silent for 60 s).
+
+`GET /v1/events?after_seq=<n>` returns the same thing as a page, for clients
+that only want to catch up (e.g. `agentring replies` when `serve` isn't
+running).
+
+Visibility: both principals see all persisted events; each side acts on them
+according to `direction`/`from`. Devices additionally get `agent.presence`.
+
+### Push (FCM)
+
+Sent through the `PushProvider` interface:
+
+```ts
+interface PushProvider {
+  readonly name: string;                       // "fcm" | "unifiedpush" (future)
+  send(target: PushTarget, payload: PushPayload, opts: PushOptions): Promise<PushResult>;
+}
+interface PushOptions { ttlSeconds: number; highPriority: boolean; collapseKey?: string }
+type PushResult = { ok: true } | { ok: false; unregistered: boolean; error: string };
+```
+
+FCM HTTP v1 message (data-only, never a `notification` block, so the app
+always handles it itself):
+
+```json
+{
+  "message": {
+    "token": "<fcm_token>",
+    "android": { "priority": "HIGH", "ttl": "30s" },
+    "data": {
+      "v": "1",
+      "relay_id": "rly_01JB…",
+      "event": "{\"type\":\"call.invite\",…}",
+      "sig": "<base64url HMAC-SHA256(push_secret, event)>"
+    }
+  }
+}
+```
+
+Which events are pushed to devices:
+
+| Event | TTL | Why |
+|---|---|---|
+| `call.invite` (`agent_to_user`) | until `expires_at` (≤ 30 s) | ring |
+| `call.accept` / `call.decline` / `call.end` / `call.missed` of a call that is ringing | 30 s | stop ringing on all devices |
+| `msg.new` (`from: agent`) | 28 days | notification |
+
+An `UNREGISTERED` FCM response clears the device's token (the app will
+re-send it via `POST /v1/device/fcm` on next start/refresh).
+
+## Flows
+
+### Pairing
+
+```
+agentring pair
+  └─ POST /v1/pairing-tokens  (agent)        → { pairing_token, expires_at, qr_payload }
+     prints QR(qr_payload)                      qr_payload = {"v":1,"relay_url":"https://…","pairing_token":"pt_…"}
+app scans QR
+  └─ POST /v1/pair { pairing_token, fcm_token, device_name, platform, app_version }
+       → { device_id, device_jwt, push_secret, relay_id, agent_name }
+     relay: token single-use (stored hashed), expires after 10 min
+app stores device_jwt + push_secret (EncryptedSharedPreferences / Keystore)
+FirebaseMessagingService.onNewToken → POST /v1/device/fcm { fcm_token }
+```
+
+`agentring pair` polls `GET /v1/devices` (or listens on WS) and prints
+"Paired with Pixel 8 ✅".
+
+### Message agent → user (M1)
+
+```
+agentring msg "hola" → POST /v1/messages {text}  (agent) → 201 {msg_id}
+relay: store, event msg.new(from=agent) → WS (all) + FCM (devices)
+app: verify sig → notification (MessagingStyle, inline reply)
+```
+
+### Reply user → agent (M1)
+
+```
+app (inline reply or thread) → POST /v1/messages {text, client_msg_id, reply_to?}  (device)
+relay: event msg.new(from=user) → WS
+daemon serve: store locally          agentring replies [--since]
+(daemon not running: `agentring replies` falls back to GET /v1/messages?from=user)
+```
+
+### Outbound call (agent → user) (M2)
+
+```
+daemon: POST /v1/calls {reason, priority}  (agent)
+  → 201 { call: {state: ringing,…}, join: {livekit_url, livekit_token, room} }
+  daemon worker joins the room immediately
+relay: create LiveKit room "call_<id>", event call.invite → WS + FCM, start 30 s timer
+app: FCM → verify → ConnectionService.addNewIncomingCall → CallStyle + FSI
+     → POST /v1/calls/{id}/ringing
+user answers → POST /v1/calls/{id}/accept → 200 { call, join }  → app joins room
+relay: state active, event call.accept
+hang up (either side) → POST /v1/calls/{id}/end → state ended, event call.end
+no answer in 30 s → state missed, event call.missed → daemon sends msg.new(reason) fallback (M4)
+```
+
+### Inbound call (user → agent) (M4)
+
+```
+app: POST /v1/calls {reason?}  (device)  → 201 { call, join }  → app joins & waits
+  (503 agent_offline if no daemon WebSocket is connected)
+relay: event call.invite(direction=user_to_agent) → WS
+daemon: POST /v1/calls/{id}/accept → join → starts worker
+```
+
+### Call states
+
+```
+           accept                 end
+ringing ───────────▶ active ───────────▶ ended
+   │ decline ─▶ declined
+   │ timeout ─▶ missed
+   └ caller end ─▶ canceled
+```
+
+LiveKit `room_finished` webhook on an `active` call → `ended` with
+`by: relay, reason: room_closed` (covers crashes and lost connectivity).
+
+### LiveKit
+
+- Room `call_<call_id>`, `emptyTimeout` 30 s, created by the relay.
+- Identities: `agent`, `device_<device_id>`.
+- Token: one room, `canPublish`, `canSubscribe`, `canPublishData`, TTL 120 s
+  (join window only; an established session is not affected).
+- Live transcript (M3): the worker publishes LiveKit Agents' standard
+  `lk.transcription` text stream; the app renders it.
+
+## Daemon local HTTP API (M5, sketch)
+
+Bound to `127.0.0.1:7878` by default, `Authorization: Bearer <local key>`.
+
+| Method | Path | Body / query | Response |
+|---|---|---|---|
+| POST | `/call` | `{reason, priority?, wait?}` | `{call_id, status, summary?}` |
+| POST | `/message` | `{text}` | `{msg_id}` |
+| GET | `/replies` | `?since=<ms or msg_id>` | `{messages: [...]}` |
+| GET | `/calls/{id}` | | `{call_id, status, duration_ms?, summary?, transcript?}` |
+
+The MCP streamable-HTTP transport is mounted on the same server at `/mcp`.
