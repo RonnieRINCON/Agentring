@@ -1,0 +1,10 @@
+{
+  "description": "FCM data payload signature test vector: sig = base64url(HMAC-SHA256(base64url_decode(push_secret), utf8(event)))",
+  "push_secret": "q8Vx0m3cJ5a1n1wYg7Kc9b2dE4fH6iL8oP0rS2tU4vA",
+  "data": {
+    "v": "1",
+    "relay_id": "rly_01JB0000000000000000000010",
+    "event": "{\"type\":\"msg.new\",\"id\":\"evt_01JB0000000000000000000003\",\"ts\":1761200000000,\"seq\":45,\"msg_id\":\"msg_01JB0000000000000000000004\",\"from\":\"agent\",\"text\":\"Build finished ✅\"}",
+    "sig": "2bTXB6rfWn6PpznOF-vi1Jz4m8vxs3XWqlx7x8q0IjE"
+  }
+}

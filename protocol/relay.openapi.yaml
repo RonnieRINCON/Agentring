@@ -635,7 +635,7 @@ components:
         app_version: { type: string, maxLength: 32 }
     PairResponse:
       type: object
-      required: [device_id, device_jwt, push_secret, relay_id, agent_name]
+      required: [device_id, device_jwt, push_secret, relay_id, agent_name, push_config]
       properties:
         device_id: { $ref: "#/components/schemas/DeviceId" }
         device_jwt: { type: string }
@@ -644,6 +644,27 @@ components:
           type: string
         relay_id: { $ref: "#/components/schemas/RelayId" }
         agent_name: { type: string }
+        push_config: { $ref: "#/components/schemas/PushConfig" }
+    PushConfig:
+      description: |
+        How the app should register for push. Lets one prebuilt APK work with
+        any user's own Firebase project: the app initialises Firebase at
+        runtime with these public client values instead of a compiled-in
+        google-services.json. `null` when the relay has no push configured.
+      oneOf:
+        - type: "null"
+        - type: object
+          required: [provider, fcm]
+          properties:
+            provider: { const: fcm }
+            fcm:
+              type: object
+              required: [project_id, application_id, api_key, sender_id]
+              properties:
+                project_id: { type: string }
+                application_id: { type: string, description: "mobilesdk_app_id, e.g. 1:1234:android:abcd" }
+                api_key: { type: string }
+                sender_id: { type: string, description: "project_number" }
     Device:
       type: object
       required: [device_id, name, platform, created_at, has_push_token]

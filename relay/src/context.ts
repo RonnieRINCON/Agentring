@@ -1,0 +1,41 @@
+import type { FastifyRequest } from "fastify";
+import type { Auth, Principal } from "./auth.js";
+import type { Config } from "./config.js";
+import type { Db } from "./db/database.js";
+import type { EventLog } from "./events.js";
+import { forbidden } from "./errors.js";
+import type { PushConfig } from "./protocol.js";
+import type { WsHub } from "./routes/ws.js";
+
+export interface Ctx {
+  cfg: Config;
+  db: Db;
+  auth: Auth;
+  events: EventLog;
+  relayId: string;
+  pushConfig: PushConfig;
+  pushProviderName: string;
+  hub: WsHub;
+}
+
+declare module "fastify" {
+  interface FastifyRequest {
+    principal?: Principal;
+  }
+}
+
+type Kind = Principal["kind"];
+
+/** Fastify preHandler that authenticates and restricts to the given principal kinds. */
+export function requireAuth(ctx: Ctx, ...kinds: Kind[]) {
+  return async (req: FastifyRequest) => {
+    const p = await ctx.auth.authenticate(req.headers.authorization);
+    if (!kinds.includes(p.kind)) throw forbidden(`This endpoint is not available to ${p.kind} credentials`);
+    req.principal = p;
+  };
+}
+
+export function principal(req: FastifyRequest): Principal {
+  if (!req.principal) throw new Error("route is missing requireAuth");
+  return req.principal;
+}
