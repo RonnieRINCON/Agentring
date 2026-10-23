@@ -57,6 +57,7 @@ def load_settings() -> Settings:
 def write_settings(relay_url: str, api_key: str) -> Path:
     home = home_dir()
     home.mkdir(parents=True, exist_ok=True)
+    home.chmod(0o700)  # holds the API key and the local database
     cfg_path = home / "config.yaml"
     cfg = _read_yaml(cfg_path)
     cfg["relay_url"] = relay_url.rstrip("/")
@@ -67,6 +68,9 @@ def write_settings(relay_url: str, api_key: str) -> Path:
     if env_path.exists():
         lines = [line for line in env_path.read_text().splitlines() if not line.startswith("AGENTRING_API_KEY=")]
     lines.append(f"AGENTRING_API_KEY={api_key}")
-    env_path.write_text("\n".join(lines) + "\n")
+    # Create it private from the start (no window where it's world-readable).
+    fd = os.open(env_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write("\n".join(lines) + "\n")
     env_path.chmod(0o600)
     return home
