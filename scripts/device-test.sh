@@ -9,8 +9,9 @@
 #
 # A local relay runs on this computer; `adb reverse` makes it reachable from
 # the phone as http://localhost:8080, so no VPS, TLS or Wi-Fi setup is needed.
-# Push notifications need Firebase (docs/firebase.md); without it, messages
-# arrive while the app is open.
+# Push notifications need Firebase (docs/firebase.md): export
+# FCM_SERVICE_ACCOUNT_FILE and FCM_GOOGLE_SERVICES_FILE before running.
+# Without them, messages arrive while the app is open.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -48,8 +49,6 @@ say "Starting a local relay (logs: $WORK/relay.log)"
   cd "$ROOT/relay"
   PORT=$PORT HOST=127.0.0.1 AGENTRING_PUBLIC_URL="http://localhost:$PORT" AGENTRING_INSECURE_DEV=1 \
   AGENTRING_DATA_DIR="$WORK/relay-data" AGENTRING_API_KEY="$API_KEY" AGENTRING_AGENT_NAME="Test Agent" \
-  ${FCM_SERVICE_ACCOUNT_FILE:+FCM_SERVICE_ACCOUNT_FILE="$FCM_SERVICE_ACCOUNT_FILE"} \
-  ${FCM_GOOGLE_SERVICES_FILE:+FCM_GOOGLE_SERVICES_FILE="$FCM_GOOGLE_SERVICES_FILE"} \
     exec node --disable-warning=ExperimentalWarning dist/main.js
 ) > "$WORK/relay.log" 2>&1 &
 RELAY_PID=$!
