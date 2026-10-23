@@ -36,6 +36,7 @@ import org.junit.BeforeClass
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.RuleChain
+import org.junit.rules.TestRule
 import org.junit.runner.RunWith
 
 /**
@@ -59,13 +60,12 @@ class M1EndToEndTest {
 
     private val compose = createAndroidComposeRule<MainActivity>()
 
+    private val notificationPermission: TestRule =
+        if (Build.VERSION.SDK_INT >= 33) GrantPermissionRule.grant(Manifest.permission.POST_NOTIFICATIONS)
+        else TestRule { base, _ -> base }
+
     @get:Rule
-    val rules: RuleChain = RuleChain
-        .outerRule<org.junit.rules.TestRule>(
-            if (Build.VERSION.SDK_INT >= 33) GrantPermissionRule.grant(Manifest.permission.POST_NOTIFICATIONS)
-            else org.junit.rules.TestRule { base, _ -> base },
-        )
-        .around(compose)
+    val rules: RuleChain = RuleChain.outerRule(notificationPermission).around(compose)
 
     private val http = OkHttpClient()
     private val context: Context get() = InstrumentationRegistry.getInstrumentation().targetContext
