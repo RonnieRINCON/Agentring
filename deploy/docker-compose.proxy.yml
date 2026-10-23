@@ -1,0 +1,79 @@
+# agentring behind a reverse proxy you already run (host Caddy, Traefik, nginx…).
+#
+# The relay and LiveKit's signalling listen on 127.0.0.1 only; your proxy
+# terminates TLS for AGENTRING_DOMAIN and routes:
+#
+#   /rtc*                       -> 127.0.0.1:7880  (LiveKit signalling, WebSocket)
+#   /twirp/*, /v1/livekit/webhook -> 404           (LiveKit admin API / internal webhook: never public)
+#   everything else             -> 127.0.0.1:8095  (relay)
+#
+# Only LiveKit media is published on all interfaces: UDP 50000-50100 and TCP 7881.
+# See docs/setup.md ("Behind an existing reverse proxy") for the Caddy block.
+#
+# Environment (nothing secret goes here: env vars show up in `docker inspect`
+# and in deploy tooling):
+#   AGENTRING_DOMAIN       public hostname, e.g. agentring.example.com
+#   LIVEKIT_NODE_IP        this server's public IPv4 (advertised to phones for media)
+#   LIVEKIT_API_KEY        key id, e.g. lk_3f9a… (not secret)
+#
+# Secrets are read-only files on the host, one directory per container so each
+# only sees its own (see docs/setup.md):
+#   /opt/agentring/relay/     uid 1000, 0400: firebase-service-account.json,
+#                             google-services.json, livekit-api-secret
+#   /opt/agentring/livekit/   uid 65534: livekit.yaml (0444, deploy/livekit.yaml with
+#                             the key id filled in), keys.yaml (0600, "<key id>: <secret>")
+
+services:
+  relay:
+    build: ../relay
+    restart: unless-stopped
+    environment:
+      AGENTRING_PUBLIC_URL: https://${AGENTRING_DOMAIN:?set AGENTRING_DOMAIN}
+      AGENTRING_AGENT_NAME: ${AGENTRING_AGENT_NAME:-Agent}
+      AGENTRING_API_KEY: ${AGENTRING_API_KEY:-}
+      FCM_SERVICE_ACCOUNT_FILE: /secrets/firebase-service-account.json
+      FCM_GOOGLE_SERVICES_FILE: /secrets/google-services.json
+      LIVEKIT_URL: wss://${AGENTRING_DOMAIN}
+      LIVEKIT_API_URL: http://livekit:7880
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?set LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET_FILE: /secrets/livekit-api-secret
+    volumes:
+      - relay-data:/data
+      - ${AGENTRING_RELAY_SECRETS:-/opt/agentring/relay}:/secrets:ro
+    ports:
+      - "127.0.0.1:8095:8080"
+    networks: [agentring]
+    # Hardening: unprivileged user (from the Dockerfile), nothing writable but /data and /tmp.
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    cpus: 1
+    pids_limit: 256
+
+  livekit:
+    # Pinned by digest (v1.13.10).
+    image: livekit/livekit-server:v1.13.10@sha256:89ca9ce0791e18d6e03bf6e2c49ceb27e1c754eae8bd50c989386c1a5963791a
+    restart: unless-stopped
+    command: ["--config", "/etc/livekit/livekit.yaml", "--node-ip", "${LIVEKIT_NODE_IP:?set LIVEKIT_NODE_IP}"]
+    volumes:
+      - ${AGENTRING_LIVEKIT_DIR:-/opt/agentring/livekit}:/etc/livekit:ro
+    ports:
+      - "127.0.0.1:7880:7880"
+      - "7881:7881/tcp"
+      - "50000-50100:50000-50100/udp"
+    networks: [agentring]
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    cpus: 2
+    pids_limit: 512
+
+networks:
+  agentring:
+
+volumes:
+  relay-data:

@@ -72,3 +72,58 @@ agentring serve                    # optional: live connection, logs events as t
 ```
 
 Other commands: `agentring devices`, `agentring devices revoke <device_id>`.
+
+## Behind an existing reverse proxy (with calls)
+
+Use `deploy/docker-compose.proxy.yml` when the server already runs Caddy, Traefik
+or nginx on 80/443 (it is also what a Coolify "Docker Compose" app points at).
+
+What it exposes: the relay on `127.0.0.1:8095` and LiveKit signalling on
+`127.0.0.1:7880` (both reachable only through your proxy), plus LiveKit media on
+**UDP 50000–50100 and TCP 7881** on all interfaces. Open those in any cloud
+firewall in front of the server (Docker-published ports bypass `ufw`).
+
+Hardening built in: both containers run as unprivileged users with a read-only
+root filesystem, no Linux capabilities, `no-new-privileges` and CPU/memory/pid
+limits; the relay image is pinned by digest, built without npm install scripts
+and ships without npm/yarn; **no secret is passed as an environment variable**.
+
+1. On the server, as root, with the two Firebase files in a directory:
+
+   ```bash
+   deploy/prepare-host.sh /path/to/firebase-files   # prints LIVEKIT_API_KEY=lk_…
+   ```
+
+   It creates `/opt/agentring/relay` (Firebase files + LiveKit secret, uid 1000)
+   and `/opt/agentring/livekit` (config + `keys.yaml`, uid 65534). The LiveKit
+   secret is generated there and never leaves the server.
+
+2. Environment for the compose app (none of these is secret):
+   `AGENTRING_DOMAIN`, `LIVEKIT_NODE_IP` (the server's public IPv4),
+   `LIVEKIT_API_KEY` (from step 1), optionally `AGENTRING_AGENT_NAME`.
+
+3. Proxy routes. Caddy example:
+
+   ```caddyfile
+   agentring.example.com {
+   	header Strict-Transport-Security "max-age=31536000"
+   	header -Server
+   	# LiveKit's admin API and the relay's webhook are internal only.
+   	handle /twirp/* {
+   		respond 404
+   	}
+   	handle /v1/livekit/webhook {
+   		respond 404
+   	}
+   	handle /rtc* {
+   		reverse_proxy 127.0.0.1:7880
+   	}
+   	handle {
+   		reverse_proxy 127.0.0.1:8095
+   	}
+   }
+   ```
+
+4. The relay generates its API key on first start; read it with
+   `docker exec <relay container> cat /data/api_key` and give it only to the daemon
+   (`agentring init`).

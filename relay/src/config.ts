@@ -98,9 +98,12 @@ export function loadConfig(): Config {
 
   let livekit: LiveKitConfig | undefined;
   const lkKey = env("LIVEKIT_API_KEY");
-  const lkSecret = env("LIVEKIT_API_SECRET");
+  // Prefer a file (mounted read-only) so the secret never sits in the environment,
+  // where `docker inspect` and deploy tooling would show it.
+  const lkSecretFile = env("LIVEKIT_API_SECRET_FILE");
+  const lkSecret = lkSecretFile ? readFileSync(lkSecretFile, "utf8").trim() : env("LIVEKIT_API_SECRET");
   if (lkKey || lkSecret) {
-    if (!lkKey || !lkSecret) throw new Error("Set both LIVEKIT_API_KEY and LIVEKIT_API_SECRET to enable calls");
+    if (!lkKey || !lkSecret) throw new Error("Set LIVEKIT_API_KEY and LIVEKIT_API_SECRET (or LIVEKIT_API_SECRET_FILE) to enable calls");
     // Anyone holding the secret can mint tokens for any call room.
     if (lkSecret.length < 32) throw new Error("LIVEKIT_API_SECRET must be at least 32 characters (generate one with: openssl rand -base64 32)");
     // By default LiveKit is served on the relay's own hostname (Caddy routes /rtc to it).

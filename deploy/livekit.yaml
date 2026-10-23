@@ -1,0 +1,22 @@
+# LiveKit server config for agentring. Nothing secret here: the keys live in
+# keys.yaml next to it (mode 0600) and the public IP comes from --node-ip
+# (see docker-compose.proxy.yml).
+port: 7880
+key_file: /etc/livekit/keys.yaml
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 50100
+  use_external_ip: false
+room:
+  # One short-lived room per call; the relay deletes it when the call ends.
+  empty_timeout: 30
+  departure_timeout: 10
+  max_participants: 4
+webhook:
+  # Must equal LIVEKIT_API_KEY (LiveKit does not expand env vars in this file).
+  api_key: REPLACE_WITH_LIVEKIT_API_KEY
+  urls:
+    - http://relay:8080/v1/livekit/webhook
+logging:
+  level: info
