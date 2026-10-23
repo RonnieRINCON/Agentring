@@ -44,6 +44,14 @@ services:
       - "127.0.0.1:8095:8080"
     networks: [agentring]
     # Hardening: unprivileged user (from the Dockerfile), nothing writable but /data and /tmp.
+    # Probe every second while starting so the proxy routes to a new container within
+    # seconds of a deploy (the image's default waits 30 s for the first check).
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      start_period: 30s
+      start_interval: 1s
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
