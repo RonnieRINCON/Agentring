@@ -13,3 +13,4 @@ local.properties
 *.iml
 google-services.json
 .DS_Store
+uv.lock.bak
