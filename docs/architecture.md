@@ -1,6 +1,7 @@
 # Architecture (F1)
 
-> Status: M1 implemented (relay, CLI, Android messaging). Voice lands in M2–M4.
+> Status: M1 done and tested on a real phone. M2 (calls) implemented and tested on a
+> Pixel 6 / Android 16; LiveKit in the deploy compose still to do. Voice AI lands in M3.
 
 agentring lets any AI agent (Claude Code, OpenClaw, n8n, plain scripts…) place a
 VoIP call to the user's phone, send it messages, and receive calls from it. The
@@ -157,7 +158,16 @@ CI fails if generated code is stale or a fixture doesn't round-trip.
     `push_config` in the pair response; the app initialises Firebase with them.
     One prebuilt APK therefore works with anyone's own Firebase project
     (no rebuild), which keeps the quickstart short.
-12. **Placeholder package id** `dev.agentring.app` for Android. Change it if you
+12. **Jetpack Core-Telecom instead of a hand-written ConnectionService** *(M2
+    deviation, accepted)*. Incoming calls are registered with
+    `androidx.core:core-telecom` (`CallsManager.addCall`), which uses the platform
+    `CallControl` API on Android 14+ and a ConnectionService below it. Telecom is
+    optional: if `addCall` fails or times out (3 s) the call still rings through our
+    own foreground service (`phoneCall` type) + CallStyle notification + full-screen
+    intent, with LiveKit's AudioSwitch doing the routing. With Telecom, the system
+    owns audio routing (LiveKit uses `NoAudioHandler`). Settings has a switch to turn
+    Telecom off on misbehaving devices. Research behind this: `docs/voip-research.md`.
+13. **Placeholder package id** `dev.agentring.app` for Android. Change it if you
     own a domain.
 
 ## Milestone plan

@@ -24,16 +24,24 @@ self-hosted, no accounts.
 
 | Milestone | Scope | Status |
 |---|---|---|
-| **M1** | relay + pairing + messages + push | **Done, CI-verified on an emulator. Waiting for the user to test on a real phone and give the OK.** |
-| M2 | phone rings locked / Doze in < 5 s with native call UI; audio (echo/tone is fine) | next |
+| **M1** | relay + pairing + messages + push | **Done**; verified on the user's Pixel 6 (Android 16), FCM incl. forced Doze (~1.5 s). |
+| **M2** | phone rings locked / Doze in < 5 s with native call UI; audio (echo/tone is fine) | **In progress**: works on the Pixel 6 (locked + Doze → call screen in 1.6 s, in the room ~0.5 s after answer). TODO: LiveKit in deploy compose, user's listening test, OK. |
 | M3 | Gemini Live conversation (< 1 s turns), OpenAI Realtime optional; `consult_agent` with `backend: command` | |
 | M4 | call the agent from the app; missed/declined fallbacks | |
 | M5 | MCP server, skill, examples, docs, < 15 min quickstart with `docker compose up` | |
 
-Open items before M2: the user has `agentring.apk` and
-`scripts/device-test.sh` (local relay + `adb reverse` + guided or instrumented
-test on a USB phone). FCM delivery to a real phone has never been tested (needs
-the user's Firebase project, see `docs/firebase.md`).
+Agreed direction for M3: keep agentring agnostic with two plug points — the
+voice backend (OpenAI Realtime first, as the user's `jefe` uses
+`gpt-realtime-2.1-mini`; Gemini Live; later a local OpenAI-Realtime-compatible
+server such as Hugging Face `speech-to-speech`) and the tools (any local MCP
+server, e.g. jefe-mcp on :8787, plus the built-in `consult_agent`). Over the
+phone, only an allowlist of tools.
+
+Dependency policy (user asked for care after recent supply-chain attacks):
+prefer releases at least ~2 weeks old, pin exact versions, check the lockfiles
+against OSV before pushing. Apply age limits per package (`uv lock
+--exclude-newer-package`), never globally: a global `--exclude-newer` once
+downgraded certifi to a version with compromised CA roots.
 
 ## Repository layout
 
@@ -109,6 +117,17 @@ Local real-phone test: `scripts/device-test.sh [apk]` or `--instrumented`.
 - Docker builds inside the cloud sandbox can't reach npm; the compose stack is
   verified by the `deploy-smoke` CI job instead.
 - `ubuntu-latest` runners need disk freed for the emulator (already in the workflow).
+- Local M2 testing (see `build-local/`, git-excluded): relay on :8080, LiveKit in
+  Docker (`livekit/livekit-server:v1.13.10`, `node_ip` = the Mac's LAN IP, UDP
+  50000-50200) because the macOS firewall blocks the Homebrew `livekit-server`
+  binary; WebRTC ignores loopback candidates, so `adb reverse` can't carry media.
+  The phone reaches the relay and LiveKit signalling via `adb reverse tcp:8080`
+  and `tcp:7880` (wireless adb works).
+- Espresso < 3.7 crashes on Android 16 (`InputManager.getInstance`); the
+  instrumented test needs the phone unlocked.
+- Core-Telecom `disconnect()` only accepts LOCAL/REMOTE/MISSED/REJECTED; any other
+  cause throws and leaves a ghost RINGING call that blocks later calls
+  (`CallException 5`). `TelecomBridge.platformCause` maps them.
 
 ## What M2 needs (from the original spec)
 
