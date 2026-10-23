@@ -166,6 +166,121 @@ def pair(
         raise _fail("pairing token expired; run `agentring pair` again")
 
 
+_TERMINAL = {"ended", "missed", "declined", "canceled"}
+
+
+@app.command()
+def call(
+    reason: Annotated[str, typer.Argument(help="Why you're calling; shown on the phone (max 500 chars).")],
+    urgent: Annotated[bool, typer.Option("--urgent", help="Ring like an alarm, bypassing Do Not Disturb if allowed.")] = False,
+    agent_name: Annotated[Optional[str], typer.Option("--agent-name", help="Caller name shown for this call.")] = None,
+    greeting: Annotated[
+        Optional[str], typer.Option("--greeting", help="What the agent says when the user answers (default: the reason).")
+    ] = None,
+    voice: Annotated[Optional[str], typer.Option("--voice", help="macOS `say` voice for the greeting.")] = None,
+    json_out: JsonOpt = False,
+) -> None:
+    """Call the phone. Rings until answered (30 s); on answer the agent greets and echoes you (M2 audio test)."""
+    try:
+        from .voice.echo import EchoWorker, synthesize
+    except ImportError:
+        raise _fail("voice support is not installed: install agentring with the [voice] extra") from None
+
+    s = _settings()
+    log = logging.getLogger("agentring")
+    client = _client(s)
+
+    async def run() -> dict:
+        after = (await asyncio.to_thread(client.list_events, 0, 1))["last_seq"]
+        try:
+            created = await asyncio.to_thread(
+                client.create_call, reason, priority="urgent" if urgent else "normal", agent_name=agent_name
+            )
+        except RelayError as e:
+            raise _fail(str(e)) from None
+        c, join = created["call"], created["join"]
+        t0 = c["created_at"]
+        call_id = c["call_id"]
+        if not json_out:
+            typer.echo(f"Calling… {call_id} (Ctrl+C to hang up)")
+
+        text = greeting if greeting is not None else f"{c['agent_name']}. {reason}"
+        pcm = await asyncio.to_thread(synthesize, text, voice)
+        user_left = asyncio.Event()
+        worker = EchoWorker(pcm, user_left)
+        stop = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, stop.set)
+            except NotImplementedError:
+                pass
+
+        def say(line: str) -> None:
+            if not json_out:
+                typer.echo(f"  +{(_now_ms() - t0) / 1000:5.1f}s  {line}")
+
+        # Join the room while the phone rings; the user shouldn't wait for us after answering.
+        joining = asyncio.create_task(worker.start(join["livekit_url"], join["livekit_token"]))
+        joined = False
+        try:
+            state = c["state"]
+            while state not in _TERMINAL:
+                if joining.done() and not joined:
+                    joined = True
+                    if joining.exception():
+                        log.error("could not join the call's room: %s", joining.exception())
+                        typer.secho("error: the agent could not join the call (LiveKit unreachable?)", fg=typer.colors.RED, err=True)
+                        stop.set()
+                    else:
+                        say("agent in the room")
+                if stop.is_set() or user_left.is_set():
+                    c = await asyncio.to_thread(client.end_call, call_id)
+                    state = c["state"]
+                    break
+                page = await asyncio.to_thread(client.list_events, after, 100)
+                for e in page["events"]:
+                    after = e.get("seq", after)
+                    if e.get("call_id") != call_id:
+                        continue
+                    t = e["type"]
+                    if t == "call.ringing":
+                        say(f"ringing on the phone ({e['device_id']})")
+                    elif t == "call.accept":
+                        say("answered")
+                        state = "active"
+                    elif t == "call.decline":
+                        say("declined")
+                        state = "declined"
+                    elif t == "call.missed":
+                        say("no answer")
+                        state = "missed"
+                    elif t == "call.end":
+                        say(f"ended by {e['by']} ({e['reason']})")
+                        state = "ended"
+                try:
+                    await asyncio.wait_for(asyncio.shield(stop.wait()), 0.3)
+                except asyncio.TimeoutError:
+                    pass
+        finally:
+            if not joining.done():
+                joining.cancel()
+            await asyncio.gather(joining, return_exceptions=True)
+            await worker.stop()
+        return await asyncio.to_thread(client.get_call, call_id)
+
+    try:
+        final = asyncio.run(run())
+    finally:
+        client.close()
+    if json_out:
+        _emit_json(final)
+    else:
+        dur = f", {final['duration_ms'] / 1000:.0f} s" if final.get("duration_ms") is not None else ""
+        typer.echo(f"Call {final['state']}{dur}")
+    log.debug("call finished: %s", final)
+
+
 @app.command()
 def msg(
     text: Annotated[str, typer.Argument(help="Message text (max 4000 chars).")],

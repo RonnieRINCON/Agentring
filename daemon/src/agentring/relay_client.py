@@ -80,6 +80,19 @@ class RelayClient:
     def mark_read(self, msg_id: str) -> None:
         self._request("POST", f"/v1/messages/{msg_id}/read")
 
+    # calls
+    def create_call(self, reason: str, *, priority: str = "normal", agent_name: str | None = None) -> dict:
+        body: dict[str, Any] = {"reason": reason, "priority": priority}
+        if agent_name:
+            body["agent_name"] = agent_name
+        return self._request("POST", "/v1/calls", json=body)
+
+    def get_call(self, call_id: str) -> dict:
+        return self._request("GET", f"/v1/calls/{call_id}")
+
+    def end_call(self, call_id: str) -> dict:
+        return self._request("POST", f"/v1/calls/{call_id}/end")
+
     # events
     def list_events(self, after_seq: int = 0, limit: int = 500) -> dict:
         return self._request("GET", "/v1/events", params={"after_seq": after_seq, "limit": limit})

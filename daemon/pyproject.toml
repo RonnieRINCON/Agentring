@@ -15,8 +15,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Voice worker (M2+): livekit-agents and realtime model plugins.
-voice = []
+# Voice worker (M2+): LiveKit realtime SDK; livekit-agents and model plugins in M3.
+voice = ["livekit>=1.1.20,<1.2"]
 
 [project.scripts]
 agentring = "agentring.cli:main"
