@@ -12,9 +12,12 @@
 # Environment (nothing secret): AGENTRING_DOMAIN, LIVEKIT_NODE_IP, LIVEKIT_API_KEY,
 # AGENTRING_AGENT_NAME. Secrets: files prepared by deploy/prepare-host.sh.
 
+# Coolify runs compose with the repository root as project directory, so paths are
+# relative to the repo root. Locally: docker compose --project-directory . -f deploy/docker-compose.coolify.yml
+
 services:
   relay:
-    build: ../relay
+    build: ./relay
     restart: unless-stopped
     environment:
       AGENTRING_PUBLIC_URL: https://${AGENTRING_DOMAIN:?set AGENTRING_DOMAIN}
