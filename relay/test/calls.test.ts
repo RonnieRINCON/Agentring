@@ -154,6 +154,15 @@ describe("calls", () => {
         payload: JSON.stringify(body),
       });
     expect((await hook("forged", { event: "room_finished", room: { name: call.call_id } })).statusCode).toBe(401);
+    // Not reachable through the public proxy, even with a valid signature.
+    const proxied = await b.app.inject({
+      method: "POST",
+      url: "/v1/livekit/webhook",
+      headers: { authorization: "ok", "content-type": "application/webhook+json", "x-forwarded-for": "203.0.113.9" },
+      payload: JSON.stringify({ event: "room_finished", room: { name: call.call_id } }),
+    });
+    expect(proxied.statusCode).toBe(404);
+    expect(b.ctx.calls!.get(call.call_id)!.state).toBe("active");
     // someone else leaving doesn't end it
     await hook("ok", { event: "participant_left", room: { name: call.call_id }, participant: { identity: "observer" } });
     expect(b.ctx.calls!.get(call.call_id)!.state).toBe("active");

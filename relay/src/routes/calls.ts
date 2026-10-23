@@ -370,6 +370,9 @@ export function callRoutes(app: FastifyInstance, ctx: Ctx, calls: Calls): void {
     scope.addContentTypeParser("application/webhook+json", { parseAs: "string" }, (_req, body, done) => done(null, body));
     scope.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => done(null, body));
     scope.post<{ Body: string }>("/v1/livekit/webhook", async (req, reply) => {
+      // LiveKit calls this over the internal network. Anything that came through the
+      // public reverse proxy (which adds X-Forwarded-For) is turned away, signature or not.
+      if (req.headers["x-forwarded-for"] !== undefined) throw notFound("Route");
       let event;
       try {
         event = await livekit().receiveWebhook(req.body, req.headers.authorization);
