@@ -82,11 +82,16 @@ class M1EndToEndTest {
         }
     }
 
+    /** Runs a shell command as the shell user and waits for it to finish. */
+    private fun shell(cmd: String) {
+        val pfd = InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(cmd)
+        android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd).use { it.readBytes() }
+    }
+
     private fun screenshot(name: String) {
-        // Runs as the shell user, which can write to /data/local/tmp; CI pulls these.
-        InstrumentationRegistry.getInstrumentation().uiAutomation
-            .executeShellCommand("screencap -p /data/local/tmp/agentring-$name.png").close()
-        Thread.sleep(500)
+        compose.waitForIdle()
+        // The shell user can write to /data/local/tmp; CI pulls these files.
+        shell("screencap -p /data/local/tmp/agentring-$name.png")
     }
 
     private fun waitForTag(tag: String, text: String? = null, timeoutMs: Long = 15_000) {
@@ -167,12 +172,10 @@ class M1EndToEndTest {
         val nm = context.getSystemService(NotificationManager::class.java)
         val notification = nm.activeNotifications.firstOrNull { it.id == Notifications.ID_MESSAGES }
         assertNotNull("message notification posted", notification)
-        InstrumentationRegistry.getInstrumentation().uiAutomation
-            .executeShellCommand("cmd statusbar expand-notifications").close()
+        shell("cmd statusbar expand-notifications")
         Thread.sleep(1500)
-        screenshot("05-notification")
-        InstrumentationRegistry.getInstrumentation().uiAutomation
-            .executeShellCommand("cmd statusbar collapse").close()
+        shell("screencap -p /data/local/tmp/agentring-05-notification.png")
+        shell("cmd statusbar collapse")
 
         // 6. Inline reply from the notification, through the real PendingIntent.
         val action = notification!!.notification.actions.first { it.remoteInputs?.isNotEmpty() == true }

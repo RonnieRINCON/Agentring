@@ -5,6 +5,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import kotlin.math.min
@@ -35,26 +36,37 @@ class RelaySocket(
     private var attempts = 0
     @Volatile private var running = false
 
-    fun start() = scheduler.execute {
-        if (running) return@execute
+    /** Runs on the socket's thread; silently dropped once the socket is stopped. */
+    private fun post(block: () -> Unit) {
+        try {
+            scheduler.execute(block)
+        } catch (e: RejectedExecutionException) {
+            // stopped
+        }
+    }
+
+    fun start() = post {
+        if (running) return@post
         running = true
         connect()
     }
 
-    fun stop() = scheduler.execute {
+    /** Closes the connection for good and releases the thread. A stopped socket can't be restarted. */
+    fun stop() = post {
         running = false
         retry?.cancel(false)
         ws?.close(1000, "bye")
         ws = null
         listener.onState(State.DISCONNECTED)
+        scheduler.shutdown()
     }
 
     private fun connect() {
         if (!running) return
         listener.onState(State.CONNECTING)
         val socket = http.newWebSocket(api.webSocketRequest(lastSeq()), object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) = scheduler.execute {
-                if (ws !== webSocket) return@execute
+            override fun onOpen(webSocket: WebSocket, response: Response) = post {
+                if (ws !== webSocket) return@post
                 attempts = 0
                 listener.onState(State.CONNECTED)
             }
@@ -70,11 +82,11 @@ class RelaySocket(
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                 webSocket.close(1000, null)
-                scheduler.execute { onDown(webSocket, unauthorized = code == 4401) }
+                post { onDown(webSocket, unauthorized = code == 4401) }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) =
-                scheduler.execute { onDown(webSocket, unauthorized = response?.code == 401) }
+                post { onDown(webSocket, unauthorized = response?.code == 401) }
         })
         ws = socket
     }

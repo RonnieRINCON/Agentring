@@ -24,7 +24,7 @@ class ConnectionManager : DefaultLifecycleObserver {
     private val _agentOnline = MutableStateFlow<Boolean?>(null)
     val agentOnline: StateFlow<Boolean?> = _agentOnline
 
-    private var socket: RelaySocket? = null
+    @Volatile private var socket: RelaySocket? = null
     private var foreground = false
 
     override fun onStart(owner: LifecycleOwner) {
@@ -43,21 +43,26 @@ class ConnectionManager : DefaultLifecycleObserver {
         val p = Graph.pairing.current ?: return
         if (Graph.pairing.revoked.value) return
         val api = RelayApi(p.relayUrl, p.deviceJwt, userAgent = Graph.userAgent)
-        socket = RelaySocket(api, { Graph.messages.lastSeq }, object : RelaySocket.Listener {
+        var created: RelaySocket? = null
+        val s = RelaySocket(api, { Graph.messages.lastSeq }, object : RelaySocket.Listener {
             override fun onEvent(event: Event) {
                 if (event is Event.AgentPresence) _agentOnline.value = event.online
                 Graph.messages.apply(event, advanceSeq = true)
             }
 
             override fun onState(state: RelaySocket.State) {
-                _relayState.value = state
+                // A socket being torn down must not overwrite its replacement's state.
+                if (socket === created) _relayState.value = state
             }
 
             override fun onUnauthorized() {
                 Log.w(TAG, "relay rejected our credentials")
                 Graph.pairing.markRevoked()
             }
-        }).also { it.start() }
+        })
+        created = s
+        socket = s
+        s.start()
 
         Graph.appScope.launch(Dispatchers.IO) {
             try {
@@ -75,6 +80,7 @@ class ConnectionManager : DefaultLifecycleObserver {
     fun disconnect() {
         socket?.stop()
         socket = null
+        _relayState.value = RelaySocket.State.DISCONNECTED
         _agentOnline.value = null
     }
 

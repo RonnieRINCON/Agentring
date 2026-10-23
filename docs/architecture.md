@@ -1,6 +1,6 @@
 # Architecture (F1)
 
-> Status: **proposal for M1 review**. Nothing here is implemented yet.
+> Status: M1 implemented (relay, CLI, Android messaging). Voice lands in M2–M4.
 
 agentring lets any AI agent (Claude Code, OpenClaw, n8n, plain scripts…) place a
 VoIP call to the user's phone, send it messages, and receive calls from it. The
@@ -152,7 +152,12 @@ CI fails if generated code is stale or a fixture doesn't round-trip.
     `/twirp*` to LiveKit, so the quickstart needs one DNS record. LiveKit media
     goes over UDP 50000–60000 (+ TCP 7881 fallback, + embedded TURN/TLS on 443
     if needed).
-11. **Placeholder package id** `dev.agentring.app` for Android. Change it if you
+11. **Firebase configured at runtime.** The relay reads the user's
+    `google-services.json` and returns its public client values as
+    `push_config` in the pair response; the app initialises Firebase with them.
+    One prebuilt APK therefore works with anyone's own Firebase project
+    (no rebuild), which keeps the quickstart short.
+12. **Placeholder package id** `dev.agentring.app` for Android. Change it if you
     own a domain.
 
 ## Milestone plan
