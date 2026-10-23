@@ -248,6 +248,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/livekit/webhook": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * LiveKit server webhook (room/participant events).
+         * @description Called by the LiveKit server, not by clients. Authenticated with the
+         *     LiveKit webhook signature (a JWT signed with the LiveKit API secret that
+         *     carries the SHA-256 of the body). `room_finished`, or either party
+         *     leaving the room, ends an `active` call with `by: relay, reason: room_closed`.
+         */
+        post: operations["livekitWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/messages": {
         parameters: {
             query?: never;
@@ -345,26 +368,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/livekit/webhook": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * LiveKit server webhook (room_finished, participant_left…). Internal.
-         * @description Authenticated with LiveKit's webhook signature (Authorization header).
-         */
-        post: operations["livekitWebhook"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -402,6 +405,7 @@ export interface components {
                  * @example busy
                  * @example no_devices
                  * @example agent_offline
+                 * @example calls_unavailable
                  * @example invalid_state
                  * @example rate_limited
                  * @example internal
@@ -1033,7 +1037,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description `agent_offline` (device caller, no daemon connected). */
+            /** @description `agent_offline` (device caller, no daemon connected) or `calls_unavailable` (LiveKit is not configured on this relay). */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1165,6 +1169,29 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    livekitWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/webhook+json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description Processed (also for events that don't concern a call). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
         };
     };
     listMessages: {
@@ -1312,29 +1339,6 @@ export interface operations {
         responses: {
             /** @description Switching protocols. Frames follow `#/components/schemas/Event`. */
             101: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            401: components["responses"]["Unauthorized"];
-        };
-    };
-    livekitWebhook: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/webhook+json": Record<string, never>;
-            };
-        };
-        responses: {
-            /** @description Processed. */
-            200: {
                 headers: {
                     [name: string]: unknown;
                 };

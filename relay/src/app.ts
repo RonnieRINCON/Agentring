@@ -10,10 +10,12 @@ import { type Db, metaOrInit, openDatabase } from "./db/database.js";
 import { ApiError } from "./errors.js";
 import { EventLog } from "./events.js";
 import { newId, randomToken } from "./ids.js";
+import { LiveKitServer, type LiveKitService } from "./livekit.js";
 import type { PushConfig } from "./protocol.js";
 import { PushDispatcher } from "./push/dispatcher.js";
 import { FcmProvider } from "./push/fcm.js";
 import type { PushProvider } from "./push/push-provider.js";
+import { Calls, callRoutes } from "./routes/calls.js";
 import { messageRoutes } from "./routes/messages.js";
 import { pairingRoutes } from "./routes/pairing.js";
 import { systemRoutes } from "./routes/system.js";
@@ -23,6 +25,8 @@ export interface BuildOptions {
   logger?: FastifyServerOptions["logger"];
   /** Inject a push provider (tests). Defaults to FCM when configured. */
   pushProvider?: PushProvider;
+  /** Inject LiveKit (tests). Defaults to the configured server, if any. */
+  livekit?: LiveKitService;
 }
 
 export interface BuiltApp {
@@ -85,9 +89,13 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Bu
     pushConfig,
     pushProviderName: provider?.name ?? "none",
     hub: new WsHub(events),
+    livekit: opts.livekit ?? (cfg.livekit ? new LiveKitServer(cfg.livekit) : undefined),
   };
+  if (!ctx.livekit) app.log.warn("LiveKit is not configured: calls are disabled");
+  const calls = new Calls(ctx);
+  ctx.calls = calls;
 
-  const dispatcher = new PushDispatcher(db, provider, relayId, app.log);
+  const dispatcher = new PushDispatcher(db, provider, relayId, app.log, (id) => calls.get(id));
   events.onEvent((e) => dispatcher.handle(e));
 
   app.setErrorHandler((err, req, reply) => {
@@ -111,9 +119,14 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Bu
   systemRoutes(app, ctx);
   pairingRoutes(app, ctx);
   messageRoutes(app, ctx);
+  callRoutes(app, ctx, calls);
+  calls.resume();
+  // Fetch the FCM access token now so the first call's push doesn't wait for it.
+  void provider?.prepare?.().catch((err: unknown) => app.log.warn({ err }, "push provider warm-up failed"));
   wsRoutes(app, ctx);
 
   app.addHook("onClose", async () => {
+    calls.stop();
     ctx.hub.closeAll();
     db.close();
   });

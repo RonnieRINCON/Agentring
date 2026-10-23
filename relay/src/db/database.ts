@@ -46,6 +46,24 @@ const MIGRATIONS: string[] = [
     body TEXT NOT NULL
   );
   `,
+  `
+  CREATE TABLE calls (
+    call_id TEXT PRIMARY KEY,
+    direction TEXT NOT NULL CHECK (direction IN ('agent_to_user','user_to_agent')),
+    state TEXT NOT NULL CHECK (state IN ('ringing','active','ended','missed','declined','canceled')),
+    reason TEXT NOT NULL DEFAULT '',
+    priority TEXT NOT NULL CHECK (priority IN ('normal','urgent')),
+    agent_name TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    answered_at INTEGER,
+    ended_at INTEGER,
+    ended_by TEXT,
+    end_reason TEXT,
+    device_id TEXT
+  );
+  CREATE INDEX calls_open ON calls(state) WHERE state IN ('ringing','active');
+  `,
 ];
 
 export type Db = DatabaseSync;

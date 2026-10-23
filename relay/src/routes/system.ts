@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { type Ctx, principal, requireAuth } from "../context.js";
 import type { Schemas } from "../protocol.js";
+import { callFromRow } from "./calls.js";
 
 export const VERSION = "0.1.0";
 
@@ -16,7 +17,10 @@ export function systemRoutes(app: FastifyInstance, ctx: Ctx): void {
       agent_name: ctx.cfg.agentName,
       agent_online: ctx.hub.isAgentOnline(),
       push_provider: ctx.pushProviderName,
-      active_call: null,
+      active_call: (() => {
+        const open = ctx.calls?.open();
+        return open ? callFromRow(open) : null;
+      })(),
     };
     if (principal(req).kind === "agent") {
       const row = ctx.db.prepare("SELECT COUNT(*) AS n FROM devices WHERE revoked_at IS NULL").get() as { n: number };

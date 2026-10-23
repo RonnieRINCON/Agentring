@@ -21,4 +21,6 @@ export type PushResult = { ok: true } | { ok: false; unregistered: boolean; erro
 export interface PushProvider {
   readonly name: string;
   send(target: PushTarget, payload: PushPayload, opts: PushOptions): Promise<PushResult>;
+  /** Optional warm-up (e.g. fetch credentials) so the first real push is fast. */
+  prepare?(): Promise<void>;
 }

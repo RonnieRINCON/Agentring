@@ -3,8 +3,10 @@ import type { Auth, Principal } from "./auth.js";
 import type { Config } from "./config.js";
 import type { Db } from "./db/database.js";
 import type { EventLog } from "./events.js";
+import type { LiveKitService } from "./livekit.js";
 import { forbidden } from "./errors.js";
 import type { PushConfig } from "./protocol.js";
+import type { Calls } from "./routes/calls.js";
 import type { WsHub } from "./routes/ws.js";
 
 export interface Ctx {
@@ -16,6 +18,9 @@ export interface Ctx {
   pushConfig: PushConfig;
   pushProviderName: string;
   hub: WsHub;
+  /** Undefined when LiveKit isn't configured: calls are then unavailable. */
+  livekit?: LiveKitService;
+  calls?: Calls;
 }
 
 declare module "fastify" {

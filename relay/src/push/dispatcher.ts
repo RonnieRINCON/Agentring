@@ -7,6 +7,11 @@ import type { PushPayload, PushProvider } from "./push-provider.js";
 /** FCM data payloads are capped at 4096 bytes; leave room for the other keys. */
 const MAX_EVENT_BYTES = 3000;
 const MESSAGE_TTL_S = 28 * 24 * 3600;
+/** Call state changes only matter while a phone may still be ringing or on the call. */
+const CALL_UPDATE_TTL_S = 30;
+
+/** Just enough of a call for push routing. */
+export type CallLookup = (callId: string) => { direction: string } | undefined;
 
 export function signEvent(pushSecret: string, eventJson: string): string {
   return createHmac("sha256", Buffer.from(pushSecret, "base64url")).update(eventJson, "utf8").digest("base64url");
@@ -33,10 +38,23 @@ interface PushRule {
 }
 
 /** Which events wake the phone. Everything else is delivered over the WebSocket only. */
-function ruleFor(event: Event): PushRule | undefined {
+function ruleFor(event: Event, getCall: CallLookup): PushRule | undefined {
   switch (event.type) {
     case "msg.new":
       return event.from === "agent" ? { ttlSeconds: MESSAGE_TTL_S, highPriority: true } : undefined;
+    case "call.invite":
+      // Never deliver an invite after it expired: TTL = time left to ring.
+      return event.direction === "agent_to_user"
+        ? { ttlSeconds: Math.max(1, Math.ceil((event.expires_at - Date.now()) / 1000)), highPriority: true }
+        : undefined;
+    case "call.accept":
+    case "call.decline":
+    case "call.end":
+    case "call.missed":
+      // Stops the ringing on every device (or tears down the call screen).
+      return getCall(event.call_id)?.direction === "agent_to_user"
+        ? { ttlSeconds: CALL_UPDATE_TTL_S, highPriority: true }
+        : undefined;
     default:
       return undefined;
   }
@@ -48,11 +66,12 @@ export class PushDispatcher {
     private readonly provider: PushProvider | undefined,
     private readonly relayId: string,
     private readonly log: FastifyBaseLogger,
+    private readonly getCall: CallLookup = () => undefined,
   ) {}
 
   handle(event: Event): void {
     if (!this.provider) return;
-    const rule = ruleFor(event);
+    const rule = ruleFor(event, this.getCall);
     if (!rule) return;
     const devices = this.db
       .prepare("SELECT device_id, push_secret, fcm_token FROM devices WHERE revoked_at IS NULL AND fcm_token IS NOT NULL")

@@ -1,5 +1,6 @@
 import { buildApp, type BuiltApp } from "../src/app.js";
 import type { Config } from "../src/config.js";
+import type { JoinInfo, LiveKitService } from "../src/livekit.js";
 import type { PushOptions, PushPayload, PushProvider, PushResult, PushTarget } from "../src/push/push-provider.js";
 
 export class FakePush implements PushProvider {
@@ -9,6 +10,25 @@ export class FakePush implements PushProvider {
   async send(target: PushTarget, payload: PushPayload, opts: PushOptions): Promise<PushResult> {
     this.sent.push({ target, payload, opts });
     return this.next;
+  }
+}
+
+/** Records room operations; webhooks are "signed" by passing authorization "ok". */
+export class FakeLiveKit implements LiveKitService {
+  created: string[] = [];
+  deleted: string[] = [];
+  async join(room: string, identity: string): Promise<JoinInfo> {
+    return { livekit_url: "wss://lk.test", livekit_token: `tok:${room}:${identity}`, room, identity, expires_at: Date.now() + 120_000 };
+  }
+  async createRoom(room: string): Promise<void> {
+    this.created.push(room);
+  }
+  async deleteRoom(room: string): Promise<void> {
+    this.deleted.push(room);
+  }
+  async receiveWebhook(body: string, authorization: string | undefined) {
+    if (authorization !== "ok") throw new Error("bad signature");
+    return JSON.parse(body);
   }
 }
 
@@ -33,10 +53,11 @@ export function testConfig(over: Partial<Config> = {}): Config {
 
 export const AGENT = { authorization: "Bearer ak_test_key" };
 
-export async function setup(over: Partial<Config> = {}): Promise<BuiltApp & { push: FakePush }> {
+export async function setup(over: Partial<Config> = {}): Promise<BuiltApp & { push: FakePush; livekit: FakeLiveKit }> {
   const push = new FakePush();
-  const built = await buildApp(testConfig(over), { logger: false, pushProvider: push });
-  return { ...built, push };
+  const livekit = new FakeLiveKit();
+  const built = await buildApp(testConfig(over), { logger: false, pushProvider: push, livekit });
+  return { ...built, push, livekit };
 }
 
 /** Creates a pairing token and redeems it; returns the device credentials. */

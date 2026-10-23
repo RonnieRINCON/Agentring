@@ -7,6 +7,7 @@ export type ErrorCode =
   | "busy"
   | "no_devices"
   | "agent_offline"
+  | "calls_unavailable"
   | "invalid_state"
   | "rate_limited"
   | "internal";

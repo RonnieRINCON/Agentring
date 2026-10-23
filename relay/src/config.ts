@@ -18,12 +18,22 @@ export interface Config {
   apiKey?: string;
   ringTimeoutS: number;
   insecureDev: boolean;
+  livekit?: LiveKitConfig;
   fcm?: {
     serviceAccountFile: string;
     client: FcmClientConfig;
     /** Overridable for tests. */
     apiBase: string;
   };
+}
+
+export interface LiveKitConfig {
+  /** URL handed to clients (phone and daemon) to join rooms, e.g. wss://relay.example.com. */
+  publicUrl: string;
+  /** URL the relay uses for LiveKit's server API (room service). */
+  apiUrl: string;
+  apiKey: string;
+  apiSecret: string;
 }
 
 export const ANDROID_PACKAGE = "dev.agentring.app";
@@ -86,6 +96,23 @@ export function loadConfig(): Config {
     };
   }
 
+  let livekit: LiveKitConfig | undefined;
+  const lkKey = env("LIVEKIT_API_KEY");
+  const lkSecret = env("LIVEKIT_API_SECRET");
+  if (lkKey || lkSecret) {
+    if (!lkKey || !lkSecret) throw new Error("Set both LIVEKIT_API_KEY and LIVEKIT_API_SECRET to enable calls");
+    // Anyone holding the secret can mint tokens for any call room.
+    if (lkSecret.length < 32) throw new Error("LIVEKIT_API_SECRET must be at least 32 characters (generate one with: openssl rand -base64 32)");
+    // By default LiveKit is served on the relay's own hostname (Caddy routes /rtc to it).
+    const lkPublic = env("LIVEKIT_URL", publicUrl.replace(/^http/, "ws"))!.replace(/\/+$/, "");
+    livekit = {
+      publicUrl: lkPublic,
+      apiUrl: env("LIVEKIT_API_URL", lkPublic.replace(/^ws/, "http"))!.replace(/\/+$/, ""),
+      apiKey: lkKey,
+      apiSecret: lkSecret,
+    };
+  }
+
   return {
     host: env("HOST", "0.0.0.0")!,
     port,
@@ -96,6 +123,7 @@ export function loadConfig(): Config {
     ringTimeoutS: Number(env("AGENTRING_RING_TIMEOUT_S", "30")),
     insecureDev,
     fcm,
+    livekit,
   };
 }
 

@@ -194,7 +194,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "503":
-          description: "`agent_offline` (device caller, no daemon connected)."
+          description: "`agent_offline` (device caller, no daemon connected) or `calls_unavailable` (LiveKit is not configured on this relay)."
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -308,6 +308,26 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/livekit/webhook:
+    post:
+      tags: [calls]
+      operationId: livekitWebhook
+      summary: LiveKit server webhook (room/participant events).
+      description: |
+        Called by the LiveKit server, not by clients. Authenticated with the
+        LiveKit webhook signature (a JWT signed with the LiveKit API secret that
+        carries the SHA-256 of the body). `room_finished`, or either party
+        leaving the room, ends an `active` call with `by: relay, reason: room_closed`.
+      security: [{ livekitWebhook: [] }]
+      requestBody:
+        required: true
+        content:
+          application/webhook+json:
+            schema: { type: object }
+      responses:
+        "200": { description: Processed (also for events that don't concern a call). }
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
   /v1/messages:
     post:
@@ -438,22 +458,6 @@ paths:
           description: Switching protocols. Frames follow `#/components/schemas/Event`.
         "401": { $ref: "#/components/responses/Unauthorized" }
 
-  /v1/livekit/webhook:
-    post:
-      tags: [system]
-      operationId: livekitWebhook
-      summary: LiveKit server webhook (room_finished, participant_left…). Internal.
-      description: Authenticated with LiveKit's webhook signature (Authorization header).
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/webhook+json:
-            schema: { type: object }
-      responses:
-        "200": { description: Processed. }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-
 components:
   securitySchemes:
     agentKey:
@@ -466,6 +470,11 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: device_jwt obtained from POST /v1/pair.
+    livekitWebhook:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: LiveKit webhook signature (JWT signed with the LiveKit API secret).
 
   parameters:
     DeviceId:
@@ -575,7 +584,7 @@ components:
           properties:
             code:
               type: string
-              examples: [invalid_request, unauthorized, invalid_pairing_token, forbidden, not_found, busy, no_devices, agent_offline, invalid_state, rate_limited, internal]
+              examples: [invalid_request, unauthorized, invalid_pairing_token, forbidden, not_found, busy, no_devices, agent_offline, calls_unavailable, invalid_state, rate_limited, internal]
             message: { type: string }
 
     # ---------- system ----------

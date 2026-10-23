@@ -32,6 +32,10 @@ export class FcmProvider implements PushProvider {
     return this.sa.project_id;
   }
 
+  async prepare(): Promise<void> {
+    await this.token();
+  }
+
   private async token(): Promise<string> {
     if (this.accessToken && this.accessToken.expiresAt > Date.now() + 60_000) return this.accessToken.value;
     const tokenUri = this.sa.token_uri ?? "https://oauth2.googleapis.com/token";
