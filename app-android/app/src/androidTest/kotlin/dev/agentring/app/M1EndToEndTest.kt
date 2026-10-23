@@ -172,8 +172,12 @@ class M1EndToEndTest {
         val outcome = PushHandler.handle(context, data)
         assertTrue("outcome=$outcome", outcome is PushHandler.Outcome.Notified)
         val nm = context.getSystemService(NotificationManager::class.java)
+        // NotificationManagerService enqueues asynchronously: the notification shows up in
+        // activeNotifications a moment after notify() returns (slow on CI emulators).
+        waitFor(timeoutMs = 5_000, what = "message notification posted") {
+            nm.activeNotifications.any { it.id == Notifications.ID_MESSAGES }
+        }
         val notification = nm.activeNotifications.firstOrNull { it.id == Notifications.ID_MESSAGES }
-        assertNotNull("message notification posted", notification)
         shell("cmd statusbar expand-notifications")
         Thread.sleep(1500)
         shell("screencap -p /data/local/tmp/agentring-05-notification.png")
