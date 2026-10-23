@@ -54,7 +54,13 @@ const invalidState = (state: CallState) => new ApiError(409, "invalid_state", `C
  *
  *   ringing ─accept→ active ─end→ ended
  *   ringing ─decline→ declined | ─timeout→ missed | ─caller end→ canceled
+ *
+ * Group calls (agent → user): every paired phone rings and each one may answer
+ * until `expires_at`; they all join the same room. A phone hanging up only leaves;
+ * the call ends when the agent hangs up or the last phone leaves. The call is
+ * `declined` only when every ringing phone declined.
  */
+type PartState = "ringing" | "joined" | "declined" | "missed" | "left";
 export class Calls {
   private readonly timers = new Map<string, NodeJS.Timeout>();
   /** Devices that already reported `ringing`, so the event is emitted once per device. */
@@ -74,8 +80,31 @@ export class Calls {
 
   /** After a restart: time out calls that expired while we were down and re-arm the others. */
   resume(): void {
-    const ringing = this.ctx.db.prepare("SELECT * FROM calls WHERE state = 'ringing'").all() as unknown as CallRow[];
-    for (const c of ringing) this.armTimer(c);
+    const open = this.ctx.db.prepare("SELECT * FROM calls WHERE state IN ('ringing','active')").all() as unknown as CallRow[];
+    for (const c of open) this.armTimer(c);
+  }
+
+  private part(callId: string, deviceId: string): PartState | undefined {
+    const r = this.ctx.db
+      .prepare("SELECT state FROM call_participants WHERE call_id = ? AND device_id = ?")
+      .get(callId, deviceId) as { state: PartState } | undefined;
+    return r?.state;
+  }
+
+  private setPart(callId: string, deviceId: string, state: PartState): void {
+    this.ctx.db
+      .prepare(
+        `INSERT INTO call_participants (call_id, device_id, state, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(call_id, device_id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at`,
+      )
+      .run(callId, deviceId, state, Date.now());
+  }
+
+  private countParts(callId: string, ...states: PartState[]): number {
+    const r = this.ctx.db
+      .prepare(`SELECT COUNT(*) AS n FROM call_participants WHERE call_id = ? AND state IN (${states.map(() => "?").join(",")})`)
+      .get(callId, ...states) as { n: number };
+    return r.n;
   }
 
   stop(): void {
@@ -116,6 +145,12 @@ export class Calls {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(row.call_id, direction, "ringing", row.reason, row.priority, row.agent_name, now, row.expires_at, row.device_id);
+    if (direction === "agent_to_user") {
+      const devs = this.ctx.db.prepare("SELECT device_id FROM devices WHERE revoked_at IS NULL").all() as Array<{ device_id: string }>;
+      for (const d of devs) this.setPart(row.call_id, d.device_id, "ringing");
+    } else if (p.kind === "device") {
+      this.setPart(row.call_id, p.deviceId, "joined");
+    }
     this.ctx.events.emit({
       type: "call.invite",
       call_id: row.call_id,
@@ -132,7 +167,8 @@ export class Calls {
   ringing(callId: string, deviceId: string): void {
     const c = this.get(callId);
     if (!c) throw notFound("Call");
-    if (c.state !== "ringing" || c.direction !== "agent_to_user") return;
+    const stillRinging = c.state === "ringing" || (c.state === "active" && Date.now() <= c.expires_at);
+    if (!stillRinging || c.direction !== "agent_to_user") return;
     let set = this.ringingDevices.get(callId);
     if (!set) this.ringingDevices.set(callId, (set = new Set()));
     if (set.has(deviceId)) return;
@@ -140,15 +176,33 @@ export class Calls {
     this.ctx.events.emit({ type: "call.ringing", call_id: callId, device_id: deviceId });
   }
 
+  /**
+   * Answer. For agent calls any phone may answer while the call rings (until
+   * `expires_at`), and a phone that already joined may rejoin (new token) while
+   * the call is active. The first answer moves the call to `active`.
+   */
   accept(callId: string, p: Principal): CallRow {
     const c = this.mustBeCallee(callId, p);
     const now = Date.now();
-    const deviceId = p.kind === "device" ? p.deviceId : c.device_id;
-    const res = this.ctx.db
-      .prepare("UPDATE calls SET state = 'active', answered_at = ?, device_id = ? WHERE call_id = ? AND state = 'ringing'")
-      .run(now, deviceId, callId);
-    if (res.changes !== 1) throw invalidState(this.get(callId)!.state);
-    this.settle(callId);
+    if (p.kind === "device") {
+      const prev = this.part(callId, p.deviceId);
+      if (c.state === "active" && prev === "joined") return c; // rejoin after a drop
+      const ringing = c.state === "ringing" || (c.state === "active" && now <= c.expires_at);
+      if (!ringing || (prev !== undefined && prev !== "ringing")) throw invalidState(c.state === "active" ? "active" : c.state);
+      if (c.state === "ringing") {
+        this.ctx.db
+          .prepare("UPDATE calls SET state = 'active', answered_at = ?, device_id = ? WHERE call_id = ? AND state = 'ringing'")
+          .run(now, p.deviceId, callId);
+      }
+      this.setPart(callId, p.deviceId, "joined");
+    } else {
+      const res = this.ctx.db
+        .prepare("UPDATE calls SET state = 'active', answered_at = ? WHERE call_id = ? AND state = 'ringing'")
+        .run(now, callId);
+      if (res.changes !== 1) throw invalidState(this.get(callId)!.state);
+      this.settle(callId);
+    }
+    this.ringingDevices.get(callId)?.delete(p.kind === "device" ? p.deviceId : "");
     this.ctx.events.emit({
       type: "call.accept",
       call_id: callId,
@@ -158,42 +212,79 @@ export class Calls {
     return this.get(callId)!;
   }
 
+  /**
+   * Decline. A phone declining only stops its own ringing; the call becomes
+   * `declined` when no phone is left ringing or on the call.
+   */
   decline(callId: string, p: Principal): CallRow {
-    this.mustBeCallee(callId, p);
+    const c = this.mustBeCallee(callId, p);
+    const by = p.kind === "agent" ? "agent" : "user";
+    if (p.kind === "device") {
+      if (this.part(callId, p.deviceId) !== "ringing" || (c.state !== "ringing" && c.state !== "active")) {
+        throw invalidState(c.state);
+      }
+      this.setPart(callId, p.deviceId, "declined");
+      this.ctx.events.emit({ type: "call.decline", call_id: callId, by, device_id: p.deviceId });
+      if (c.state === "ringing" && this.countParts(callId, "ringing", "joined") === 0) {
+        this.ctx.db
+          .prepare("UPDATE calls SET state = 'declined', ended_at = ?, ended_by = ? WHERE call_id = ? AND state = 'ringing'")
+          .run(Date.now(), by, callId);
+        this.settle(callId);
+        this.closeRoom(callId);
+      }
+      return this.get(callId)!;
+    }
     const res = this.ctx.db
       .prepare("UPDATE calls SET state = 'declined', ended_at = ?, ended_by = ? WHERE call_id = ? AND state = 'ringing'")
-      .run(Date.now(), p.kind === "agent" ? "agent" : "user", callId);
+      .run(Date.now(), by, callId);
     if (res.changes !== 1) throw invalidState(this.get(callId)!.state);
     this.settle(callId);
-    this.ctx.events.emit({
-      type: "call.decline",
-      call_id: callId,
-      by: p.kind === "agent" ? "agent" : "user",
-      ...(p.kind === "device" ? { device_id: p.deviceId } : {}),
-    });
+    this.ctx.events.emit({ type: "call.decline", call_id: callId, by });
     this.closeRoom(callId);
     return this.get(callId)!;
   }
 
-  /** Hang up. While ringing only the caller may (→ canceled). Idempotent on terminal states. */
+  /**
+   * Hang up. While ringing only the caller may (→ canceled). On an active agent
+   * call a phone only leaves; the call ends with the agent or the last phone.
+   * Idempotent on terminal states.
+   */
   end(callId: string, p: Principal): CallRow {
     const c = this.get(callId);
     if (!c) throw notFound("Call");
-    if (p.kind === "device" && c.device_id && c.device_id !== p.deviceId && c.state === "active") {
-      throw forbidden("Another device is on this call");
-    }
     const by = p.kind === "agent" ? "agent" : "user";
     if (c.state === "ringing") {
       if (p.kind !== callerKind(c.direction)) throw forbidden("Decline a ringing call instead of ending it");
       return this.finish(callId, "ringing", "canceled", by, "canceled") ?? this.get(callId)!;
     }
-    if (c.state === "active") return this.finish(callId, "active", "ended", by, "hangup") ?? this.get(callId)!;
-    return c;
+    if (c.state !== "active") return c;
+    if (p.kind === "device" && c.direction === "agent_to_user") {
+      const prev = this.part(callId, p.deviceId);
+      if (prev === "ringing") return this.decline(callId, p);
+      if (prev !== "joined") throw forbidden("This device is not on the call");
+      return this.leave(callId, p.deviceId, by, "hangup");
+    }
+    return this.finish(callId, "active", "ended", by, "hangup") ?? this.get(callId)!;
   }
 
-  /** The room went away (LiveKit webhook) or the callee left it. */
+  /** A phone left the room (LiveKit webhook): same as hanging up. */
+  deviceLeft(callId: string, deviceId: string): void {
+    if (this.part(callId, deviceId) === "joined") this.leave(callId, deviceId, "relay", "room_closed");
+  }
+
+  /** The room went away, or the agent left it (LiveKit webhook). */
   roomClosed(callId: string): void {
     this.finish(callId, "active", "ended", "relay", "room_closed");
+  }
+
+  private leave(callId: string, deviceId: string, by: Schemas["Actor"], reason: Schemas["EndReason"]): CallRow {
+    this.setPart(callId, deviceId, "left");
+    const c = this.get(callId)!;
+    // Others may still answer until the ring window closes; then the timer ends an empty call.
+    if (this.countParts(callId, "joined") === 0 && (Date.now() > c.expires_at || this.countParts(callId, "ringing") === 0)) {
+      return this.finish(callId, "active", "ended", by, reason) ?? this.get(callId)!;
+    }
+    return c;
   }
 
   private finish(
@@ -236,11 +327,23 @@ export class Calls {
 
   private timeout(callId: string): void {
     this.timers.delete(callId);
+    this.ringingDevices.delete(callId);
+    // Phones that never answered stop ringing (they time out locally too).
+    this.ctx.db
+      .prepare("UPDATE call_participants SET state = 'missed', updated_at = ? WHERE call_id = ? AND state = 'ringing'")
+      .run(Date.now(), callId);
+    const c = this.get(callId);
+    if (c?.state === "active") {
+      // Everyone who answered already left while others could still join.
+      if (c.direction === "agent_to_user" && this.countParts(callId, "joined") === 0) {
+        this.finish(callId, "active", "ended", "relay", "hangup");
+      }
+      return;
+    }
     const res = this.ctx.db
       .prepare("UPDATE calls SET state = 'missed', ended_at = ?, ended_by = 'relay' WHERE call_id = ? AND state = 'ringing'")
       .run(Date.now(), callId);
     if (res.changes !== 1) return;
-    this.ringingDevices.delete(callId);
     this.ctx.events.emit({ type: "call.missed", call_id: callId });
     this.closeRoom(callId);
   }
@@ -383,15 +486,14 @@ export function callRoutes(app: FastifyInstance, ctx: Ctx, calls: Calls): void {
       const c = room ? calls.get(room) : undefined;
       if (c?.state === "active") {
         const identity = event.participant?.identity ?? "";
-        const leftCallee =
-          event.event === "participant_left" &&
-          (c.direction === "agent_to_user" ? identity === `device_${c.device_id}` : identity === "agent");
-        const leftCaller =
-          event.event === "participant_left" &&
-          (c.direction === "agent_to_user" ? identity === "agent" : identity === `device_${c.device_id}`);
-        if (event.event === "room_finished" || leftCallee || leftCaller) {
+        const left = event.event === "participant_left";
+        if (event.event === "room_finished" || (left && identity === "agent")) {
           req.log.info({ call: c.call_id, event: event.event, identity }, "call ended by LiveKit");
           calls.roomClosed(c.call_id);
+        } else if (left && identity.startsWith("device_")) {
+          const deviceId = identity.slice("device_".length);
+          if (c.direction === "agent_to_user") calls.deviceLeft(c.call_id, deviceId);
+          else if (deviceId === c.device_id) calls.roomClosed(c.call_id);
         }
       }
       return reply.code(200).send({ ok: true });

@@ -140,8 +140,11 @@ CI fails if generated code is stale or a fixture doesn't round-trip.
    measure the M2 "< 5 s" target and to tell "not delivered" from "ignored".
 6. **One call at a time** (F1): `POST /v1/calls` returns `409 busy` while another
    call is ringing or active.
-7. **Multiple devices allowed, ring all, first accept wins.** Re-pairing a new
-   phone doesn't need revoking the old one first. Still "one user".
+7. **Multiple devices allowed, ring all; group calls** *(changed in M2 at the
+   user's request: was "first accept wins")*. Every paired phone rings and any of
+   them may answer while it rings; they share the room (the user and their brother
+   on the same call with the agent). A phone declining or hanging up only affects
+   itself.
 8. **Daemon ↔ relay auth** with a single API key (`AGENTRING_API_KEY`) generated
    by the relay on first start (or set via env). Device auth with a
    long-lived HS256 `device_jwt` checked against the device table on every

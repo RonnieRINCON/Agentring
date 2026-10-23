@@ -259,7 +259,12 @@ paths:
     post:
       tags: [calls]
       operationId: acceptCall
-      summary: Callee accepts. First accept wins.
+      summary: Callee accepts. For agent calls, any paired phone may answer while the call rings.
+      description: |
+        Group calls: every paired phone rings and each may answer until `expires_at`;
+        all of them join the same LiveKit room. The first answer moves the call to
+        `active`. A phone that already joined may accept again while the call is
+        active (rejoin after a drop, new token). Otherwise `409 invalid_state`.
       security: [{ agentKey: [] }, { deviceJwt: [] }]
       responses:
         "200":
@@ -279,6 +284,10 @@ paths:
       tags: [calls]
       operationId: declineCall
       summary: Callee declines a ringing call.
+      description: |
+        A phone declining only stops its own ringing (event `call.decline` with its
+        `device_id`); the call becomes `declined` when no phone is left ringing or on
+        the call.
       security: [{ agentKey: [] }, { deviceJwt: [] }]
       responses:
         "200":
@@ -298,6 +307,10 @@ paths:
       tags: [calls]
       operationId: endCall
       summary: Hang up. While ringing, only the caller may call this (→ `canceled`).
+      description: |
+        On an active agent call a phone only leaves; the call ends (`ended`) when the
+        agent hangs up or the last phone leaves (after the ring window, or once no
+        other phone is still ringing).
       security: [{ agentKey: [] }, { deviceJwt: [] }]
       responses:
         "200":

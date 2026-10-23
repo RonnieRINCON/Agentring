@@ -63,10 +63,10 @@ describe("calls", () => {
     expect(acc.json().call).toMatchObject({ state: "active", device_id: dev.device_id });
     expect(acc.json().join.identity).toBe(`device_${dev.device_id}`);
 
-    // second accept loses
+    // the same phone accepting again (e.g. after a drop) rejoins with a new token
     const again = await b.app.inject({ method: "POST", url: `/v1/calls/${call.call_id}/accept`, headers: dev.headers });
-    expect(again.statusCode).toBe(409);
-    expect(again.json().error.code).toBe("invalid_state");
+    expect(again.statusCode).toBe(200);
+    expect(again.json().join.identity).toBe(`device_${dev.device_id}`);
 
     // busy while active
     expect((await placeCall(b)).json().error.code).toBe("busy");
@@ -81,8 +81,70 @@ describe("calls", () => {
     const types = eventsOf(b).map((e) => e.type);
     expect(types).toEqual(["call.invite", "call.ringing", "call.accept", "call.end"]);
     await flush();
+    // accept/decline don't affect other phones in a group call, so they aren't pushed
     const pushed = b.push.sent.map((s) => JSON.parse(s.payload.event!).type);
-    expect(pushed).toEqual(["call.invite", "call.accept", "call.end"]);
+    expect(pushed).toEqual(["call.invite", "call.end"]);
+  });
+
+  it("group call: every phone rings, any may answer while it rings, the call ends with the last one", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const b = await app({ ringTimeoutS: 30 });
+    const a = await pairDevice(b, "A");
+    const c = await pairDevice(b, "B", "fcm-tok-2");
+    const d = await pairDevice(b, "C", "fcm-tok-3");
+    const { call } = (await placeCall(b)).json();
+    const post = (h: { authorization: string }, action: string) =>
+      b.app.inject({ method: "POST", url: `/v1/calls/${call.call_id}/${action}`, headers: h });
+
+    // C declines: A and B keep ringing, the call is still ringing
+    expect((await post(d.headers, "decline")).json().state).toBe("ringing");
+    // A answers, B joins later while it still rings
+    expect((await post(a.headers, "accept")).json().call.state).toBe("active");
+    vi.advanceTimersByTime(10_000);
+    const joinB = await post(c.headers, "accept");
+    expect(joinB.statusCode).toBe(200);
+    expect(joinB.json().join.identity).toBe(`device_${c.device_id}`);
+    // C declined: it can't come back in
+    expect((await post(d.headers, "accept")).statusCode).toBe(409);
+
+    // A hangs up: B and the agent stay on the call
+    expect((await post(a.headers, "end")).json().state).toBe("active");
+    expect(b.livekit.deleted).toEqual([]);
+    // B leaves the room (LiveKit webhook): last phone gone -> the call ends
+    await b.app.inject({
+      method: "POST",
+      url: "/v1/livekit/webhook",
+      headers: { authorization: "ok", "content-type": "application/webhook+json" },
+      payload: JSON.stringify({ event: "participant_left", room: { name: call.call_id }, participant: { identity: `device_${c.device_id}` } }),
+    });
+    expect(b.ctx.calls!.get(call.call_id)).toMatchObject({ state: "ended", ended_by: "relay", end_reason: "room_closed" });
+    expect(b.livekit.deleted).toEqual([call.call_id]);
+    const types = eventsOf(b).map((e) => e.type);
+    expect(types).toEqual(["call.invite", "call.decline", "call.accept", "call.accept", "call.end"]);
+  });
+
+  it("group call: answering is only possible while it rings, and all declines end it", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const b = await app({ ringTimeoutS: 30 });
+    const a = await pairDevice(b, "A");
+    const c = await pairDevice(b, "B", "fcm-tok-2");
+    const first = (await placeCall(b)).json().call;
+    await b.app.inject({ method: "POST", url: `/v1/calls/${first.call_id}/accept`, headers: a.headers });
+    vi.advanceTimersByTime(31_000);
+    // B's ring window is over
+    const late = await b.app.inject({ method: "POST", url: `/v1/calls/${first.call_id}/accept`, headers: c.headers });
+    expect(late.statusCode).toBe(409);
+    // A rejoining after the window is fine (it was on the call)
+    expect((await b.app.inject({ method: "POST", url: `/v1/calls/${first.call_id}/accept`, headers: a.headers })).statusCode).toBe(200);
+    // A leaves after the window -> nobody left, the call ends
+    expect((await b.app.inject({ method: "POST", url: `/v1/calls/${first.call_id}/end`, headers: a.headers })).json().state).toBe("ended");
+
+    const second = (await placeCall(b)).json().call;
+    await b.app.inject({ method: "POST", url: `/v1/calls/${second.call_id}/decline`, headers: a.headers });
+    expect(b.ctx.calls!.get(second.call_id)!.state).toBe("ringing");
+    const r = await b.app.inject({ method: "POST", url: `/v1/calls/${second.call_id}/decline`, headers: c.headers });
+    expect(r.json().state).toBe("declined");
+    expect(b.livekit.deleted).toContain(second.call_id);
   });
 
   it("rings out to missed after the timeout and survives a restart", async () => {

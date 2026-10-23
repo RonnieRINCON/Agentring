@@ -64,6 +64,16 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX calls_open ON calls(state) WHERE state IN ('ringing','active');
   `,
+  `
+  -- Group calls: every paired phone rings and any of them may answer while it rings.
+  CREATE TABLE call_participants (
+    call_id TEXT NOT NULL REFERENCES calls(call_id),
+    device_id TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('ringing','joined','declined','missed','left')),
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (call_id, device_id)
+  );
+  `,
 ];
 
 export type Db = DatabaseSync;

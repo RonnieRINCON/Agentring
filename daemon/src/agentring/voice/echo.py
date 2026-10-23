@@ -72,7 +72,11 @@ def synthesize(text: str, voice: str | None = None) -> bytes:
 
 
 class EchoWorker:
-    """Publishes one audio track; plays the greeting once the user joins, then echoes them."""
+    """Publishes one audio track; greets once a user joins, then echoes everyone back.
+
+    Group calls: several phones can be in the room. Each one's audio goes into its
+    own delay line and a single loop mixes them into the agent's track.
+    """
 
     def __init__(self, greeting_pcm: bytes, on_user_left: asyncio.Event):
         self.room = rtc.Room()
@@ -80,7 +84,7 @@ class EchoWorker:
         self.greeting = greeting_pcm
         self.user_left = on_user_left
         self.user_joined = asyncio.Event()
-        self._greeted = False
+        self._delays: dict[str, deque[bytes]] = {}
         self._tasks: list[asyncio.Task] = []
         self._streams: list[rtc.AudioStream] = []
 
@@ -91,14 +95,17 @@ class EchoWorker:
 
         @self.room.on("participant_disconnected")
         def _left(p: rtc.RemoteParticipant) -> None:
-            log.info("user left the room (%s)", p.identity)
-            self.user_left.set()
+            self._delays.pop(p.identity, None)
+            others = [rp for rp in self.room.remote_participants.values() if rp.identity != p.identity]
+            log.info("user left the room (%s), %d still in", p.identity, len(others))
+            if not others:
+                self.user_left.set()
 
         @self.room.on("track_subscribed")
         def _track(track: rtc.Track, _pub: rtc.RemoteTrackPublication, p: rtc.RemoteParticipant) -> None:
             if track.kind == rtc.TrackKind.KIND_AUDIO:
                 log.info("receiving audio from %s", p.identity)
-                self._tasks.append(asyncio.create_task(self._echo(track)))
+                self._tasks.append(asyncio.create_task(self._capture(track, p.identity)))
 
         @self.room.on("disconnected")
         def _disconnected(reason: object) -> None:
@@ -113,32 +120,33 @@ class EchoWorker:
         )
         if self.room.remote_participants:
             self.user_joined.set()
-        self._tasks.append(asyncio.create_task(self._greet()))
+        self._tasks.append(asyncio.create_task(self._output()))
 
-    async def _greet(self) -> None:
-        await self.user_joined.wait()
-        await asyncio.sleep(0.4)  # let the phone's audio pipeline settle so the first word isn't clipped
-        step = SAMPLES_PER_FRAME * 2
-        for i in range(0, len(self.greeting), step):
-            chunk = self.greeting[i : i + step].ljust(step, b"\x00")
-            await self.source.capture_frame(_frame(chunk))
-        self._greeted = True
-
-    async def _echo(self, track: rtc.Track) -> None:
+    async def _capture(self, track: rtc.Track, identity: str) -> None:
         stream = rtc.AudioStream(track, sample_rate=SAMPLE_RATE, num_channels=1)
         self._streams.append(stream)
-        delay = deque([_silence()] * (ECHO_DELAY_MS // FRAME_MS))
+        delay = self._delays.setdefault(identity, deque())
         pending = b""
         step = SAMPLES_PER_FRAME * 2
+        limit = ECHO_DELAY_MS // FRAME_MS + 50  # don't let a line grow while we're greeting
         async for ev in stream:
             pending += bytes(ev.frame.data.cast("B"))
             while len(pending) >= step:
                 delay.append(pending[:step])
                 pending = pending[step:]
-                out = delay.popleft()
-                # Don't talk over the greeting.
-                if self._greeted:
-                    await self.source.capture_frame(_frame(out))
+                while len(delay) > limit:
+                    delay.popleft()
+
+    async def _output(self) -> None:
+        await self.user_joined.wait()
+        await asyncio.sleep(0.4)  # let the phone's audio pipeline settle so the first word isn't clipped
+        step = SAMPLES_PER_FRAME * 2
+        for i in range(0, len(self.greeting), step):
+            await self.source.capture_frame(_frame(self.greeting[i : i + step].ljust(step, b"\x00")))
+        depth = ECHO_DELAY_MS // FRAME_MS
+        while True:
+            ready = [d.popleft() for d in list(self._delays.values()) if len(d) > depth]
+            await self.source.capture_frame(_frame(_mix(ready) if ready else _silence()))
 
     async def stop(self) -> None:
         for t in self._tasks:
@@ -148,3 +156,15 @@ class EchoWorker:
             await s.aclose()
         await self.source.aclose()
         await self.room.disconnect()
+
+
+def _mix(frames: list[bytes]) -> bytes:
+    """Sums PCM16 frames with clipping."""
+    if len(frames) == 1:
+        return frames[0]
+    n = len(frames[0]) // 2
+    acc = [0] * n
+    for f in frames:
+        for i, v in enumerate(struct.unpack(f"<{n}h", f)):
+            acc[i] += v
+    return struct.pack(f"<{n}h", *(max(-32768, min(32767, v)) for v in acc))

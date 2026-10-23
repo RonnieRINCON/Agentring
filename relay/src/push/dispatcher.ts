@@ -47,8 +47,9 @@ function ruleFor(event: Event, getCall: CallLookup): PushRule | undefined {
       return event.direction === "agent_to_user"
         ? { ttlSeconds: Math.max(1, Math.ceil((event.expires_at - Date.now()) / 1000)), highPriority: true }
         : undefined;
-    case "call.accept":
-    case "call.decline":
+    // call.accept / call.decline are not pushed: in a group call one phone answering
+    // or declining doesn't affect the others, and a high-priority push that shows
+    // nothing gets the app's later pushes deprioritized.
     case "call.end":
     case "call.missed":
       // Stops the ringing on every device (or tears down the call screen).

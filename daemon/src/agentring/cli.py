@@ -234,7 +234,16 @@ def call(
                         stop.set()
                     else:
                         say("agent in the room")
-                if stop.is_set() or user_left.is_set():
+                if user_left.is_set() and not stop.is_set():
+                    # The room emptied. In a group call another phone may still answer
+                    # while it rings: the relay decides when the call is over.
+                    user_left.clear()
+                    c = await asyncio.to_thread(client.get_call, call_id)
+                    if c["state"] == "active":
+                        say("everyone left; waiting while the other phones still ring")
+                    state = c["state"]
+                    continue
+                if stop.is_set():
                     c = await asyncio.to_thread(client.end_call, call_id)
                     state = c["state"]
                     break
@@ -245,13 +254,14 @@ def call(
                         continue
                     t = e["type"]
                     if t == "call.ringing":
-                        say(f"ringing on the phone ({e['device_id']})")
+                        say(f"ringing on {e['device_id']}")
                     elif t == "call.accept":
-                        say("answered")
+                        say(f"answered on {e.get('device_id', 'the phone')}")
                         state = "active"
                     elif t == "call.decline":
-                        say("declined")
-                        state = "declined"
+                        # Group calls: one phone declining doesn't end the call.
+                        say(f"declined on {e.get('device_id', 'the phone')}")
+                        state = (await asyncio.to_thread(client.get_call, call_id))["state"]
                     elif t == "call.missed":
                         say("no answer")
                         state = "missed"

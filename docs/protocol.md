@@ -49,8 +49,8 @@ Every event is a flat JSON object:
 |---|---|---|---|
 | `call.invite` | `call_id, direction, agent_name, reason, priority, expires_at` | ✓ | a call is created; addressed to the callee side |
 | `call.ringing` | `call_id, device_id` | ✓ | a device shows the incoming call UI |
-| `call.accept` | `call_id, by, device_id?` | ✓ | callee accepted (first accept wins) |
-| `call.decline` | `call_id, by, device_id?` | ✓ | callee declined |
+| `call.accept` | `call_id, by, device_id?` | ✓ | a callee answered (in a group call, once per phone that joins) |
+| `call.decline` | `call_id, by, device_id?` | ✓ | a callee declined (in a group call, only that phone) |
 | `call.end` | `call_id, by, reason, duration_ms?` | ✓ | either side hung up, caller canceled while ringing, or LiveKit closed the room |
 | `call.missed` | `call_id` | ✓ | no answer after `RING_TIMEOUT_S` (default 30) |
 | `msg.new` | `msg_id, from, text, reply_to?, truncated?` | ✓ | a message was posted |
@@ -131,7 +131,11 @@ Which events are pushed to devices:
 | Event | TTL | Why |
 |---|---|---|
 | `call.invite` (`agent_to_user`) | until `expires_at` (≤ 30 s) | ring |
-| `call.accept` / `call.decline` / `call.end` / `call.missed` of a call that is ringing | 30 s | stop ringing on all devices |
+| `call.end` / `call.missed` of an agent call | 30 s | stop ringing / tear down the call screen on all devices |
+
+`call.accept` and `call.decline` are not pushed: in a group call they don't
+change anything for the other phones, and high-priority pushes that show nothing
+get an app's later pushes deprioritized by FCM.
 | `msg.new` (`from: agent`) | 28 days | notification |
 
 An `UNREGISTERED` FCM response clears the device's token (the app will
@@ -211,6 +215,15 @@ ringing ───────────▶ active ─────────�
 
 LiveKit `room_finished` webhook on an `active` call → `ended` with
 `by: relay, reason: room_closed` (covers crashes and lost connectivity).
+
+### Group calls (agent → user)
+
+Every paired phone rings. Each may answer while the call rings (until
+`expires_at`); they all join the same room and hear the agent and each other.
+A phone declining or hanging up only affects itself. The call ends when the
+agent hangs up, or when the last phone leaves (once nobody else can still
+answer). It is `declined` only if every phone declined, `missed` if nobody
+answered.
 
 ### LiveKit
 

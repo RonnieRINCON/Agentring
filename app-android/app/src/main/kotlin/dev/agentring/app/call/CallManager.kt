@@ -71,8 +71,6 @@ class CallManager(private val context: Context) : TelecomBridge.Listener {
     /** Collectors that live as long as the current call. */
     private val callJobs = mutableListOf<Job>()
 
-    private val myDeviceId: String? get() = Graph.pairing.current?.deviceId
-
     // ---------------------------------------------------------------- incoming
 
     /**
@@ -239,10 +237,8 @@ class CallManager(private val context: Context) : TelecomBridge.Listener {
             val cur = _state.value ?: return@launch
             val info = cur.info
             when (event) {
-                is Event.CallAnswer -> if (event.callId == info.callId && event.deviceId != myDeviceId && cur is CallUi.Incoming) {
-                    // Answered or declined on another device.
-                    finish(info, R.string.call_answered_elsewhere, DisconnectCause.ANSWERED_ELSEWHERE)
-                }
+                // Group calls: another phone answering or declining doesn't stop ours
+                // ringing; we can still join until the call stops ringing.
                 is Event.CallEnd -> if (event.callId == info.callId && cur !is CallUi.Ended) {
                     val missed = cur is CallUi.Incoming
                     finish(info, if (missed) R.string.call_missed else R.string.call_ended_by_agent,

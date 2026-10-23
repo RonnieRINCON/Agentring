@@ -202,7 +202,13 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Callee accepts. First accept wins. */
+        /**
+         * Callee accepts. For agent calls, any paired phone may answer while the call rings.
+         * @description Group calls: every paired phone rings and each may answer until `expires_at`;
+         *     all of them join the same LiveKit room. The first answer moves the call to
+         *     `active`. A phone that already joined may accept again while the call is
+         *     active (rejoin after a drop, new token). Otherwise `409 invalid_state`.
+         */
         post: operations["acceptCall"];
         delete?: never;
         options?: never;
@@ -221,7 +227,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Callee declines a ringing call. */
+        /**
+         * Callee declines a ringing call.
+         * @description A phone declining only stops its own ringing (event `call.decline` with its
+         *     `device_id`); the call becomes `declined` when no phone is left ringing or on
+         *     the call.
+         */
         post: operations["declineCall"];
         delete?: never;
         options?: never;
@@ -240,7 +251,12 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Hang up. While ringing, only the caller may call this (→ `canceled`). */
+        /**
+         * Hang up. While ringing, only the caller may call this (→ `canceled`).
+         * @description On an active agent call a phone only leaves; the call ends (`ended`) when the
+         *     agent hangs up or the last phone leaves (after the ring window, or once no
+         *     other phone is still ringing).
+         */
         post: operations["endCall"];
         delete?: never;
         options?: never;
