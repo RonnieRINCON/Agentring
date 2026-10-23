@@ -27,3 +27,33 @@ jobs:
       - name: Daemon (unit + end-to-end against the relay build)
         working-directory: daemon
         run: uv run pytest -q
+
+  deploy-smoke:
+    name: docker compose smoke test (Caddy TLS + relay)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build and start
+        working-directory: deploy
+        run: |
+          cp .env.example .env
+          sed -i 's/^AGENTRING_DOMAIN=.*/AGENTRING_DOMAIN=localhost/' .env
+          docker compose up -d --build
+      - name: Relay answers over HTTPS and generated an API key
+        working-directory: deploy
+        run: |
+          for i in $(seq 1 60); do curl -skf https://localhost/healthz && break; sleep 2; done
+          curl -skf https://localhost/healthz | grep -q '"ok":true'
+          KEY=$(docker compose exec -T relay cat /data/api_key | tr -d '\r\n')
+          test -n "$KEY"
+          curl -skf -X POST -H "Authorization: Bearer $KEY" -H 'content-type: application/json' -d '{}' \
+            https://localhost/v1/pairing-tokens | tee /dev/stderr | grep -q '"relay_url\\":\\"https://localhost'
+          # Restart keeps the same identity and key.
+          docker compose restart relay
+          for i in $(seq 1 30); do curl -skf https://localhost/healthz && break; sleep 2; done
+          curl -skf -H "Authorization: Bearer $KEY" https://localhost/v1/status | grep -q relay_id
+      - name: Logs
+        if: always()
+        working-directory: deploy
+        run: docker compose logs --no-color

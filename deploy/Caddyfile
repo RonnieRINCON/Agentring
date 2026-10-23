@@ -1,0 +1,5 @@
+# Automatic HTTPS (Let's Encrypt) for the relay. WebSockets pass through as-is.
+{$AGENTRING_DOMAIN} {
+	encode gzip
+	reverse_proxy relay:8080
+}

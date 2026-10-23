@@ -1,0 +1,41 @@
+# agentring all-in-one deployment (M1: relay + TLS).
+# LiveKit (voice) and the optional daemon service are added in milestone 2.
+#
+#   cp .env.example .env   # set AGENTRING_DOMAIN
+#   docker compose up -d
+#   docker compose logs relay | grep -A2 "API key"   # first start only
+
+services:
+  relay:
+    build: ../relay
+    restart: unless-stopped
+    environment:
+      AGENTRING_PUBLIC_URL: https://${AGENTRING_DOMAIN:?set AGENTRING_DOMAIN in .env}
+      AGENTRING_AGENT_NAME: ${AGENTRING_AGENT_NAME:-Agent}
+      AGENTRING_API_KEY: ${AGENTRING_API_KEY:-}
+      FCM_SERVICE_ACCOUNT_FILE: ${FCM_SERVICE_ACCOUNT_FILE:-}
+      FCM_GOOGLE_SERVICES_FILE: ${FCM_GOOGLE_SERVICES_FILE:-}
+    volumes:
+      - relay-data:/data
+      - ./secrets:/secrets:ro
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2.10
+    restart: unless-stopped
+    depends_on: [relay]
+    environment:
+      AGENTRING_DOMAIN: ${AGENTRING_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  relay-data:
+  caddy-data:
+  caddy-config:
