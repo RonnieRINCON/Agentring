@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="you">Tú</string>
+
+    <string name="welcome_title">Tu agente puede llamarte</string>
+    <string name="welcome_body">agentring permite que tu agente de IA (Claude Code, OpenClaw, n8n, scripts…) te mande mensajes y, pronto, te llame como una llamada de verdad. Todo pasa por tu propio relay.</string>
+    <string name="get_started">Empezar</string>
+    <string name="notif_title">Permite las notificaciones</string>
+    <string name="notif_body">Los mensajes de tu agente llegan como notificaciones a las que puedes responder directamente.</string>
+    <string name="allow">Permitir</string>
+    <string name="skip">Saltar</string>
+    <string name="pair_title">Empareja con tu agente</string>
+    <string name="pair_body">En tu ordenador ejecuta <b>agentring pair</b> y escanea el QR, o pega el código de emparejamiento que imprime.</string>
+    <string name="scan_qr">Escanear QR</string>
+    <string name="or_paste">o pega el código de emparejamiento</string>
+    <string name="pairing_code">Código de emparejamiento</string>
+    <string name="pair">Emparejar</string>
+    <string name="pairing">Emparejando…</string>
+    <string name="scan_failed">No se pudo escanear: %1$s</string>
+    <string name="done_title">Emparejado con %1$s</string>
+    <string name="done_body">Pruébalo desde tu ordenador:\n\nagentring msg "hola"</string>
+    <string name="done_no_push">Tu relay no tiene configuradas las notificaciones push, así que los mensajes solo llegan con la app abierta. Mira docs/firebase.md.</string>
+    <string name="continue_">Continuar</string>
+
+    <string name="tab_home">Inicio</string>
+    <string name="tab_messages">Mensajes</string>
+    <string name="tab_settings">Ajustes</string>
+
+    <string name="status_relay">Relay</string>
+    <string name="status_agent">Agente</string>
+    <string name="status_push">Push</string>
+    <string name="connected">Conectado</string>
+    <string name="connecting">Conectando…</string>
+    <string name="offline">Desconectado</string>
+    <string name="online">En línea</string>
+    <string name="unknown">Desconocido</string>
+    <string name="push_registered">Registrado</string>
+    <string name="push_registering">Registrando…</string>
+    <string name="push_not_configured">No configurado en el relay</string>
+    <string name="push_unavailable">No disponible: %1$s</string>
+    <string name="push_error">Error: %1$s</string>
+    <string name="call_agent">Llamar al agente</string>
+    <string name="call_soon">Las llamadas de voz llegan en los próximos hitos.</string>
+    <string name="revoked_title">Este móvil se ha desemparejado</string>
+    <string name="revoked_body">El relay ya no acepta este móvil. Vuelve a emparejarlo con agentring pair.</string>
+    <string name="pair_again">Emparejar de nuevo</string>
+
+    <string name="messages_empty">Aún no hay mensajes.\nDesde tu ordenador ejecuta:\nagentring msg "hola"</string>
+    <string name="message_hint">Responder a %1$s</string>
+    <string name="send">Enviar</string>
+    <string name="read">Leído</string>
+    <string name="send_failed">No enviado: %1$s</string>
+
+    <string name="settings_relay">Relay</string>
+    <string name="settings_agent">Agente</string>
+    <string name="settings_device">ID del dispositivo</string>
+    <string name="settings_version">Versión de la app</string>
+    <string name="test_notification">Enviar notificación de prueba</string>
+    <string name="unpair">Desemparejar este móvil</string>
+    <string name="unpair_confirm">¿Olvidar el emparejamiento en este móvil? Para revocarlo también en el relay ejecuta: agentring devices revoke %1$s</string>
+    <string name="cancel">Cancelar</string>
+
+    <string name="channel_messages">Mensajes de tu agente</string>
+    <string name="reply">Responder</string>
+    <string name="reply_failed_title">Respuesta no enviada</string>
+    <string name="test_notification_text">Notificación de prueba de agentring ✓</string>
+</resources>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext is allowed at the platform level so a relay on a private LAN
+  (or the emulator host in CI) can be used; dev.agentring.core.RelayUrlPolicy
+  rejects plain http:// to any public host before a connection is made.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

@@ -1,0 +1,38 @@
+package dev.agentring.app.notify
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.util.Log
+import androidx.core.app.RemoteInput
+import dev.agentring.app.Graph
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import java.util.UUID
+
+/** Inline reply from the message notification. */
+class ReplyReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val text = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(Notifications.KEY_REPLY)?.toString()?.trim()
+        if (text.isNullOrEmpty()) return
+        val appContext = context.applicationContext
+        val pending = goAsync()
+        Graph.appScope.launch(Dispatchers.IO) {
+            try {
+                val api = Graph.api() ?: error("not paired")
+                val agentName = Graph.pairing.current?.agentName ?: ""
+                val shown = Graph.messages.unreadFromAgent()
+                Graph.messages.upsert(api.postMessage(text, clientMsgId = UUID.randomUUID().toString()))
+                // Replying implies the user read what the agent said.
+                Graph.messages.markAgentMessagesRead(api)
+                Notifications.showMessages(appContext, agentName, shown, sentReply = text)
+            } catch (e: Exception) {
+                Log.w("ReplyReceiver", "reply failed", e)
+                Notifications.cancelMessages(appContext)
+                Notifications.showReplyFailed(appContext, text, e.message ?: e.javaClass.simpleName)
+            } finally {
+                pending.finish()
+            }
+        }
+    }
+}

@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">agentring</string>
+    <string name="you">You</string>
+
+    <!-- Onboarding -->
+    <string name="welcome_title">Your agent can call you</string>
+    <string name="welcome_body">agentring lets your AI agent (Claude Code, OpenClaw, n8n, scripts…) send you messages and, soon, call you like a real phone call. Everything goes through your own relay.</string>
+    <string name="get_started">Get started</string>
+    <string name="notif_title">Allow notifications</string>
+    <string name="notif_body">Messages from your agent arrive as notifications you can reply to directly.</string>
+    <string name="allow">Allow</string>
+    <string name="skip">Skip</string>
+    <string name="pair_title">Pair with your agent</string>
+    <string name="pair_body">On your computer run <b>agentring pair</b> and scan the QR code, or paste the pairing code it prints.</string>
+    <string name="scan_qr">Scan QR code</string>
+    <string name="or_paste">or paste the pairing code</string>
+    <string name="pairing_code">Pairing code</string>
+    <string name="pair">Pair</string>
+    <string name="pairing">Pairing…</string>
+    <string name="scan_failed">Could not scan: %1$s</string>
+    <string name="done_title">Paired with %1$s</string>
+    <string name="done_body">Try it from your computer:\n\nagentring msg "hello"</string>
+    <string name="done_no_push">Push notifications are not configured on your relay, so messages only arrive while the app is open. See docs/firebase.md.</string>
+    <string name="continue_">Continue</string>
+
+    <!-- Tabs -->
+    <string name="tab_home">Home</string>
+    <string name="tab_messages">Messages</string>
+    <string name="tab_settings">Settings</string>
+
+    <!-- Home -->
+    <string name="status_relay">Relay</string>
+    <string name="status_agent">Agent</string>
+    <string name="status_push">Push</string>
+    <string name="connected">Connected</string>
+    <string name="connecting">Connecting…</string>
+    <string name="offline">Offline</string>
+    <string name="online">Online</string>
+    <string name="unknown">Unknown</string>
+    <string name="push_registered">Registered</string>
+    <string name="push_registering">Registering…</string>
+    <string name="push_not_configured">Not configured on relay</string>
+    <string name="push_unavailable">Unavailable: %1$s</string>
+    <string name="push_error">Error: %1$s</string>
+    <string name="call_agent">Call agent</string>
+    <string name="call_soon">Voice calls arrive in the next milestones.</string>
+    <string name="revoked_title">This phone was unpaired</string>
+    <string name="revoked_body">The relay no longer accepts this phone. Pair it again with agentring pair.</string>
+    <string name="pair_again">Pair again</string>
+
+    <!-- Messages -->
+    <string name="messages_empty">No messages yet.\nFrom your computer run:\nagentring msg "hello"</string>
+    <string name="message_hint">Reply to %1$s</string>
+    <string name="send">Send</string>
+    <string name="read">Read</string>
+    <string name="send_failed">Not sent: %1$s</string>
+
+    <!-- Settings -->
+    <string name="settings_relay">Relay</string>
+    <string name="settings_agent">Agent</string>
+    <string name="settings_device">Device ID</string>
+    <string name="settings_version">App version</string>
+    <string name="test_notification">Send a test notification</string>
+    <string name="unpair">Unpair this phone</string>
+    <string name="unpair_confirm">Forget the pairing on this phone? To also revoke it on the relay run: agentring devices revoke %1$s</string>
+    <string name="cancel">Cancel</string>
+
+    <!-- Notifications -->
+    <string name="channel_messages">Messages from your agent</string>
+    <string name="reply">Reply</string>
+    <string name="reply_failed_title">Reply not sent</string>
+    <string name="test_notification_text">Test notification from agentring ✓</string>
+</resources>
