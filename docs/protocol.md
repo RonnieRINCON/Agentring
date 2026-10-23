@@ -147,7 +147,9 @@ agentring pair
      prints QR(qr_payload)                      qr_payload = {"v":1,"relay_url":"https://…","pairing_token":"pt_…"}
 app scans QR
   └─ POST /v1/pair { pairing_token, fcm_token, device_name, platform, app_version }
-       → { device_id, device_jwt, push_secret, relay_id, agent_name }
+       → { device_id, device_jwt, push_secret, relay_id, agent_name, push_config }
+     push_config = the user's Firebase client values (or null): the app initialises
+     Firebase at runtime, so one prebuilt APK works with anyone's Firebase project
      relay: token single-use (stored hashed), expires after 10 min
 app stores device_jwt + push_secret (EncryptedSharedPreferences / Keystore)
 FirebaseMessagingService.onNewToken → POST /v1/device/fcm { fcm_token }
