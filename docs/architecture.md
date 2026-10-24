@@ -144,7 +144,9 @@ CI fails if generated code is stale or a fixture doesn't round-trip.
    user's request: was "first accept wins")*. Every paired phone rings and any of
    them may answer while it rings; they share the room (the user and their brother
    on the same call with the agent). A phone declining or hanging up only affects
-   itself.
+   itself. While the call is active, any paired phone not on it may join later
+   ("join the call", `POST /v1/calls/{id}/join`), e.g. after its ring ended,
+   after declining or after hanging up.
 8. **Daemon ↔ relay auth** with a single API key (`AGENTRING_API_KEY`) generated
    by the relay on first start (or set via env). Device auth with a
    long-lived HS256 `device_jwt` checked against the device table on every

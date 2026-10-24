@@ -207,9 +207,39 @@ export interface paths {
          * @description Group calls: every paired phone rings and each may answer until `expires_at`;
          *     all of them join the same LiveKit room. The first answer moves the call to
          *     `active`. A phone that already joined may accept again while the call is
-         *     active (rejoin after a drop, new token). Otherwise `409 invalid_state`.
+         *     active (rejoin after a drop, new token). Otherwise `409 invalid_state`; a
+         *     phone that missed its ring window, declined or left uses
+         *     `POST /v1/calls/{call_id}/join` instead.
          */
         post: operations["acceptCall"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/calls/{call_id}/join": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                call_id: components["parameters"]["CallId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A paired phone joins an agent call at any time while it is ringing or active.
+         * @description "Join the call": unlike `accept`, this works for any paired phone that is not
+         *     on the call, also after its ring window (`expires_at`), after declining, or
+         *     after hanging up, as long as the call is `ringing` or `active`. While the call
+         *     still rings it is the same as accepting (the call becomes `active`). Emits
+         *     `call.accept` with this phone's `device_id` (once per phone that joins); a
+         *     phone already on the call just gets a new token (no event). Only agent calls
+         *     (`agent_to_user`) can be joined.
+         */
+        post: operations["joinCall"];
         delete?: never;
         options?: never;
         head?: never;
@@ -423,6 +453,7 @@ export interface components {
                  * @example agent_offline
                  * @example calls_unavailable
                  * @example invalid_state
+                 * @example call_ended
                  * @example rate_limited
                  * @example internal
                  */
@@ -624,6 +655,11 @@ export interface components {
              */
             type: "call.ringing";
         };
+        /**
+         * @description A callee answered. In a group call, emitted once per phone that joins
+         *     (via `accept` or `join`). Pushed to the other phones at normal priority so
+         *     they can offer "join the call".
+         */
         CallAcceptEvent: components["schemas"]["EventBase"] & {
             /** @constant */
             type: "call.accept";
@@ -1134,6 +1170,57 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["InvalidState"];
+        };
+    };
+    joinCall: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                call_id: components["parameters"]["CallId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Joined; state `active`. Contains this phone's join info. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallWithJoin"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description `forbidden` (not an agent call). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            404: components["responses"]["NotFound"];
+            /** @description `call_ended` (the call is `ended`, `missed`, `declined` or `canceled`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description `calls_unavailable` (LiveKit is not configured on this relay). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     declineCall: {

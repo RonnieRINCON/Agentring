@@ -256,7 +256,9 @@ def call(
                     if t == "call.ringing":
                         say(f"ringing on {e['device_id']}")
                     elif t == "call.accept":
-                        say(f"answered on {e.get('device_id', 'the phone')}")
+                        # Group calls: later phones join while the call is active.
+                        verb = "joined" if state == "active" else "answered"
+                        say(f"{verb} on {e.get('device_id', 'the phone')}")
                         state = "active"
                     elif t == "call.decline":
                         # Group calls: one phone declining doesn't end the call.

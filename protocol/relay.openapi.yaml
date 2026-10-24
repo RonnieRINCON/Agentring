@@ -264,7 +264,9 @@ paths:
         Group calls: every paired phone rings and each may answer until `expires_at`;
         all of them join the same LiveKit room. The first answer moves the call to
         `active`. A phone that already joined may accept again while the call is
-        active (rejoin after a drop, new token). Otherwise `409 invalid_state`.
+        active (rejoin after a drop, new token). Otherwise `409 invalid_state`; a
+        phone that missed its ring window, declined or left uses
+        `POST /v1/calls/{call_id}/join` instead.
       security: [{ agentKey: [] }, { deviceJwt: [] }]
       responses:
         "200":
@@ -276,6 +278,46 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/InvalidState" }
+
+  /v1/calls/{call_id}/join:
+    parameters:
+      - $ref: "#/components/parameters/CallId"
+    post:
+      tags: [calls]
+      operationId: joinCall
+      summary: A paired phone joins an agent call at any time while it is ringing or active.
+      description: |
+        "Join the call": unlike `accept`, this works for any paired phone that is not
+        on the call, also after its ring window (`expires_at`), after declining, or
+        after hanging up, as long as the call is `ringing` or `active`. While the call
+        still rings it is the same as accepting (the call becomes `active`). Emits
+        `call.accept` with this phone's `device_id` (once per phone that joins); a
+        phone already on the call just gets a new token (no event). Only agent calls
+        (`agent_to_user`) can be joined.
+      security: [{ deviceJwt: [] }]
+      responses:
+        "200":
+          description: Joined; state `active`. Contains this phone's join info.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CallWithJoin" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: "`forbidden` (not an agent call)."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`call_ended` (the call is `ended`, `missed`, `declined` or `canceled`)."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: "`calls_unavailable` (LiveKit is not configured on this relay)."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /v1/calls/{call_id}/decline:
     parameters:
@@ -597,7 +639,7 @@ components:
           properties:
             code:
               type: string
-              examples: [invalid_request, unauthorized, invalid_pairing_token, forbidden, not_found, busy, no_devices, agent_offline, calls_unavailable, invalid_state, rate_limited, internal]
+              examples: [invalid_request, unauthorized, invalid_pairing_token, forbidden, not_found, busy, no_devices, agent_offline, calls_unavailable, invalid_state, call_ended, rate_limited, internal]
             message: { type: string }
 
     # ---------- system ----------
@@ -859,6 +901,10 @@ components:
             device_id: { $ref: "#/components/schemas/DeviceId" }
 
     CallAcceptEvent:
+      description: |
+        A callee answered. In a group call, emitted once per phone that joins
+        (via `accept` or `join`). Pushed to the other phones at normal priority so
+        they can offer "join the call".
       allOf:
         - $ref: "#/components/schemas/EventBase"
         - type: object

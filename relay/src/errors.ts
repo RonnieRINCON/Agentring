@@ -9,6 +9,7 @@ export type ErrorCode =
   | "agent_offline"
   | "calls_unavailable"
   | "invalid_state"
+  | "call_ended"
   | "rate_limited"
   | "internal";
 

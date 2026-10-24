@@ -82,8 +82,14 @@ class RelayApi(
         call<Unit>("POST", "/v1/calls/$callId/ringing", EMPTY, null)
     }
 
-    /** First accept wins; a later one fails with 409 `invalid_state`. */
+    /** Answers a ringing call; after the ring window it fails with 409 `invalid_state` (use [joinCall]). */
     fun acceptCall(callId: String): CallWithJoin = call("POST", "/v1/calls/$callId/accept", EMPTY, CallWithJoin.serializer())
+
+    /**
+     * Joins an agent call that is ringing or active, also after this phone's ring
+     * ended, it declined or it hung up. 409 `call_ended` once the call is over.
+     */
+    fun joinCall(callId: String): CallWithJoin = call("POST", "/v1/calls/$callId/join", EMPTY, CallWithJoin.serializer())
 
     fun declineCall(callId: String): Call = call("POST", "/v1/calls/$callId/decline", EMPTY, Call.serializer())
 

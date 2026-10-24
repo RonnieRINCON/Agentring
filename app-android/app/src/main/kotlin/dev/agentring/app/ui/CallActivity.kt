@@ -1,6 +1,7 @@
 package dev.agentring.app.ui
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
 import android.os.Build
@@ -49,6 +50,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import dev.agentring.app.Graph
 import dev.agentring.app.R
+import dev.agentring.app.call.CallInfo
 import dev.agentring.app.call.CallPermissions
 import dev.agentring.app.call.CallUi
 import kotlinx.coroutines.delay
@@ -56,14 +58,20 @@ import kotlinx.coroutines.launch
 
 /**
  * Full-screen call UI. Shown over the lock screen (it's the notification's
- * full-screen intent) and opened by the Answer action.
+ * full-screen intent) and opened by the Answer and Join actions.
  */
 class CallActivity : ComponentActivity() {
     private var proximity: PowerManager.WakeLock? = null
 
+    /** Runs once the microphone permission dialog is answered. */
+    private var afterMic: (() -> Unit)? = null
+
     private val micPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
-        // Answer either way: without the mic the user can still hear the agent.
-        Graph.calls.answer()
+        // Go on either way: without the mic the user can still hear the agent.
+        val action = afterMic
+        afterMic = null
+        action?.invoke()
+        if (Graph.calls.state.value == null) finishAndRemoveTask()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -83,7 +91,8 @@ class CallActivity : ComponentActivity() {
         lifecycleScope.launch {
             Graph.calls.state.collect { s ->
                 updateProximity(s)
-                if (s == null) finishAndRemoveTask()
+                // Not while asking for the microphone before joining: there's no call state yet.
+                if (s == null && afterMic == null) finishAndRemoveTask()
             }
         }
         setContent {
@@ -109,12 +118,24 @@ class CallActivity : ComponentActivity() {
     }
 
     private fun handle(intent: Intent?) {
-        if (intent?.action == ACTION_ANSWER) answer()
+        when (intent?.action) {
+            ACTION_ANSWER -> answer()
+            ACTION_JOIN -> infoFrom(intent)?.let { info -> withMic { Graph.calls.join(info) } }
+        }
     }
 
     private fun answer() {
         if (Graph.calls.state.value !is CallUi.Incoming) return
-        if (CallPermissions.hasMic(this)) Graph.calls.answer() else micPermission.launch(Manifest.permission.RECORD_AUDIO)
+        withMic { Graph.calls.answer() }
+    }
+
+    private fun withMic(action: () -> Unit) {
+        if (CallPermissions.hasMic(this)) {
+            action()
+        } else {
+            afterMic = action
+            micPermission.launch(Manifest.permission.RECORD_AUDIO)
+        }
     }
 
     /** Screen off when the phone is at the ear (earpiece only). */
@@ -136,6 +157,32 @@ class CallActivity : ComponentActivity() {
 
     companion object {
         const val ACTION_ANSWER = "dev.agentring.app.call.ANSWER"
+        const val ACTION_JOIN = "dev.agentring.app.call.JOIN"
+        private const val EXTRA_CALL_ID = "call_id"
+        private const val EXTRA_AGENT_NAME = "agent_name"
+        private const val EXTRA_REASON = "reason"
+        private const val EXTRA_URGENT = "urgent"
+
+        /** Opens the call screen and joins [info]'s call ("join the call"). */
+        fun joinIntent(context: Context, info: CallInfo): Intent =
+            Intent(context, CallActivity::class.java)
+                .setAction(ACTION_JOIN)
+                .putExtra(EXTRA_CALL_ID, info.callId)
+                .putExtra(EXTRA_AGENT_NAME, info.agentName)
+                .putExtra(EXTRA_REASON, info.reason)
+                .putExtra(EXTRA_URGENT, info.urgent)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+
+        private fun infoFrom(intent: Intent): CallInfo? {
+            val callId = intent.getStringExtra(EXTRA_CALL_ID) ?: return null
+            return CallInfo(
+                callId = callId,
+                agentName = intent.getStringExtra(EXTRA_AGENT_NAME).orEmpty(),
+                reason = intent.getStringExtra(EXTRA_REASON).orEmpty(),
+                urgent = intent.getBooleanExtra(EXTRA_URGENT, false),
+                expiresAt = 0,
+            )
+        }
     }
 }
 

@@ -20,8 +20,10 @@ object CallNotifications {
     const val CHANNEL_CALLS = "calls"
     const val CHANNEL_CALLS_URGENT = "calls_urgent"
     const val CHANNEL_MISSED = "missed_calls"
+    const val CHANNEL_IN_PROGRESS = "calls_in_progress"
     const val ID_CALL = 2001
     private const val ID_MISSED = 2002
+    private const val ID_JOIN = 2003
 
     fun createChannels(context: Context) {
         val nm = context.getSystemService(NotificationManager::class.java)
@@ -42,6 +44,8 @@ object CallNotifications {
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_MISSED, context.getString(R.string.channel_missed_calls), NotificationManager.IMPORTANCE_DEFAULT),
         )
+        // "Call in progress — Join": visible in the status bar, but never rings or pops up.
+        nm.createNotificationChannel(silent(CHANNEL_IN_PROGRESS, R.string.channel_calls_in_progress, NotificationManager.IMPORTANCE_DEFAULT))
     }
 
     private fun person(info: CallInfo) = Person.Builder().setName(info.agentName).setKey("agent").setImportant(true).build()
@@ -112,6 +116,46 @@ object CallNotifications {
     @SuppressLint("MissingPermission")
     fun post(context: Context, n: Notification) {
         if (Notifications.canNotify(context)) NotificationManagerCompat.from(context).notify(ID_CALL, n)
+    }
+
+    /**
+     * Ongoing "Call in progress with <agent> — Join" while a group call is active and
+     * this phone is not on it. Join opens the call screen directly (no trampoline), so
+     * the microphone foreground service may start.
+     */
+    @SuppressLint("MissingPermission")
+    fun showJoin(context: Context, offer: JoinOffer) {
+        if (!Notifications.canNotify(context)) return
+        val info = offer.info
+        val join = PendingIntent.getActivity(
+            context,
+            7,
+            CallActivity.joinIntent(context, info),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val open = PendingIntent.getActivity(
+            context,
+            8,
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val b = NotificationCompat.Builder(context, CHANNEL_IN_PROGRESS)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(context.getString(R.string.call_in_progress_with, info.agentName))
+            .setContentText(info.reason.ifBlank { context.getString(R.string.call_join_hint) })
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOngoing(true)
+            .setSilent(true)
+            .setOnlyAlertOnce(true)
+            .setContentIntent(open)
+            .addAction(R.drawable.ic_call, context.getString(R.string.call_join), join)
+        offer.answeredAt?.let { b.setUsesChronometer(true).setWhen(it) }
+        NotificationManagerCompat.from(context).notify(ID_JOIN, b.build())
+    }
+
+    fun cancelJoin(context: Context) {
+        NotificationManagerCompat.from(context).cancel(ID_JOIN)
     }
 
     @SuppressLint("MissingPermission")

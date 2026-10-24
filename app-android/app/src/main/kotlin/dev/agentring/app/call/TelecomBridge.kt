@@ -34,6 +34,7 @@ class TelecomBridge(private val context: Context, private val scope: CoroutineSc
 
     private sealed interface Command {
         data object Answer : Command
+        data object Activate : Command
         data class Disconnect(val cause: Int) : Command
         data class Route(val endpoint: CallEndpointCompat) : Command
     }
@@ -50,7 +51,18 @@ class TelecomBridge(private val context: Context, private val scope: CoroutineSc
     val systemMuted: StateFlow<Boolean> = _muted
 
     /** Adds an incoming call. Returns false (quickly) if Telecom can't take it. */
-    suspend fun addIncoming(displayName: String, callId: String, listener: Listener): Boolean {
+    suspend fun addIncoming(displayName: String, callId: String, listener: Listener): Boolean =
+        add(displayName, callId, listener, CallAttributesCompat.DIRECTION_INCOMING)
+
+    /**
+     * Adds a call this phone joins without ringing ("join the call" on a group call
+     * in progress), as an outgoing call; [activate] it right after. Returns false
+     * (quickly) if Telecom can't take it.
+     */
+    suspend fun addOutgoing(displayName: String, callId: String, listener: Listener): Boolean =
+        add(displayName, callId, listener, CallAttributesCompat.DIRECTION_OUTGOING)
+
+    private suspend fun add(displayName: String, callId: String, listener: Listener, direction: Int): Boolean {
         val ready = CompletableDeferred<Boolean>()
         commands = Channel(Channel.UNLIMITED)
         val cmds = commands
@@ -60,7 +72,7 @@ class TelecomBridge(private val context: Context, private val scope: CoroutineSc
                 val attrs = CallAttributesCompat(
                     displayName = displayName,
                     address = Uri.fromParts("agentring", callId, null),
-                    direction = CallAttributesCompat.DIRECTION_INCOMING,
+                    direction = direction,
                     callType = CallAttributesCompat.CALL_TYPE_AUDIO_CALL,
                     callCapabilities = 0,
                 )
@@ -85,6 +97,7 @@ class TelecomBridge(private val context: Context, private val scope: CoroutineSc
                             val r = runCatching {
                                 when (c) {
                                     Command.Answer -> answer(CallAttributesCompat.CALL_TYPE_AUDIO_CALL)
+                                    Command.Activate -> setActive()
                                     is Command.Disconnect -> disconnect(DisconnectCause(platformCause(c.cause)))
                                     is Command.Route -> requestEndpointChange(c.endpoint)
                                 }
@@ -113,6 +126,11 @@ class TelecomBridge(private val context: Context, private val scope: CoroutineSc
 
     fun answer() {
         commands.trySend(Command.Answer)
+    }
+
+    /** Marks a joined (outgoing) call as active. */
+    fun activate() {
+        commands.trySend(Command.Activate)
     }
 
     fun disconnect(cause: Int) {

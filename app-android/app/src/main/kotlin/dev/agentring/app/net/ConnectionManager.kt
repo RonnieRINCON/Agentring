@@ -73,6 +73,8 @@ class ConnectionManager : DefaultLifecycleObserver {
         Graph.appScope.launch(Dispatchers.IO) {
             try {
                 Graph.messages.refresh(api)
+                // A group call may be going on without this phone (missed ring, push lost): offer to join.
+                Graph.calls.onActiveCall(api.status().activeCall)
             } catch (e: RelayException) {
                 if (e.isUnauthorized) Graph.pairing.markRevoked()
             } catch (e: Exception) {

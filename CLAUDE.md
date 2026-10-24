@@ -25,7 +25,7 @@ self-hosted, no accounts.
 | Milestone | Scope | Status |
 |---|---|---|
 | **M1** | relay + pairing + messages + push | **Done**; verified on the user's Pixel 6 (Android 16), FCM incl. forced Doze (~1.5 s). |
-| **M2** | phone rings locked / Doze in < 5 s with native call UI; audio (echo/tone is fine) | **In progress**: works on the Pixel 6 (locked + Doze → call screen in 1.6 s, in the room ~0.5 s after answer). TODO: LiveKit in deploy compose, user's listening test, OK. |
+| **M2** | phone rings locked / Doze in < 5 s with native call UI; audio (echo/tone is fine) | **In progress**: works on the Pixel 6 (locked + Doze → call screen in 1.6 s, in the room ~0.5 s after answer). Group calls + "join the call" while active (`POST /v1/calls/{id}/join`, Join notification/banner; not yet tested on a real phone). TODO: LiveKit in deploy compose, user's listening test, OK. |
 | M3 | Gemini Live conversation (< 1 s turns), OpenAI Realtime optional; `consult_agent` with `backend: command` | |
 | M4 | call the agent from the app; missed/declined fallbacks | |
 | M5 | MCP server, skill, examples, docs, < 15 min quickstart with `docker compose up` | |
@@ -63,7 +63,7 @@ n8n), `docs/troubleshooting-oem.md`, daemon Dockerfile/compose profile.
 ## Build and test
 
 ```bash
-cd relay  && npm ci && npm run typecheck && npm test && npm run build   # 18 tests
+cd relay  && npm ci && npm run typecheck && npm test && npm run build   # 31 tests, Node >= 22.13
 cd daemon && uv run pytest -q          # needs relay/dist (e2e against the real relay)
 cd app-android && ./gradlew :core:test :app:assembleDebug
 cd app-android && ./gradlew -PcoreOnly :core:test   # when Google's Maven is unreachable
@@ -91,7 +91,10 @@ Local real-phone test: `scripts/device-test.sh [apk]` or `--instrumented`.
   `google-services.json` and returns `push_config` in the pair response, so one
   prebuilt APK works with anyone's Firebase project.
 - Extra call state `canceled` and informational event `call.ringing`; one call at
-  a time (`409 busy`); multiple devices ring, first accept wins.
+  a time (`409 busy`); group calls: every phone rings, any may answer while it
+  rings, and any paired phone not on an active call may join it later
+  (`POST /v1/calls/{id}/join`; `call.accept` is pushed at normal priority so the
+  other phones can show "Join").
 - Auth: daemon uses an `ak_…` API key (generated on first relay start, stored in
   `DATA_DIR/api_key`); devices use a long-lived HS256 `device_jwt` checked
   against the DB on every request (immediate revocation, WS closed with 4401).

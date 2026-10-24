@@ -9,6 +9,8 @@ const MAX_EVENT_BYTES = 3000;
 const MESSAGE_TTL_S = 28 * 24 * 3600;
 /** Call state changes only matter while a phone may still be ringing or on the call. */
 const CALL_UPDATE_TTL_S = 30;
+/** "Someone is on the call, you can join": long enough for a phone that was offline; the app re-checks the call. */
+const CALL_JOINABLE_TTL_S = 3600;
 
 /** Just enough of a call for push routing. */
 export type CallLookup = (callId: string) => { direction: string } | undefined;
@@ -47,9 +49,15 @@ function ruleFor(event: Event, getCall: CallLookup): PushRule | undefined {
       return event.direction === "agent_to_user"
         ? { ttlSeconds: Math.max(1, Math.ceil((event.expires_at - Date.now()) / 1000)), highPriority: true }
         : undefined;
-    // call.accept / call.decline are not pushed: in a group call one phone answering
-    // or declining doesn't affect the others, and a high-priority push that shows
-    // nothing gets the app's later pushes deprioritized.
+    case "call.accept":
+      // Lets the other phones offer "join the call" (also those whose ring ended or
+      // that never got the invite). Normal priority: it doesn't need to wake a phone
+      // in Doze, and a high-priority push that shows nothing (the phones still
+      // ringing) gets the app's later pushes deprioritized.
+      return event.by === "user" && getCall(event.call_id)?.direction === "agent_to_user"
+        ? { ttlSeconds: CALL_JOINABLE_TTL_S, highPriority: false }
+        : undefined;
+    // call.decline is not pushed: in a group call one phone declining doesn't affect the others.
     case "call.end":
     case "call.missed":
       // Stops the ringing on every device (or tears down the call screen).
@@ -78,6 +86,8 @@ export class PushDispatcher {
       .prepare("SELECT device_id, push_secret, fcm_token FROM devices WHERE revoked_at IS NULL AND fcm_token IS NOT NULL")
       .all() as Array<{ device_id: string; push_secret: string; fcm_token: string }>;
     for (const d of devices) {
+      // The phone that joined already knows.
+      if (event.type === "call.accept" && event.device_id === d.device_id) continue;
       const payload = buildPayload(this.relayId, d.push_secret, event);
       void this.provider
         .send({ deviceId: d.device_id, token: d.fcm_token }, payload, rule)

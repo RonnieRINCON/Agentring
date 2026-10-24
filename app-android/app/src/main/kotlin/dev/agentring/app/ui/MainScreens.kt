@@ -55,6 +55,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.agentring.app.BuildConfig
 import dev.agentring.app.Graph
 import dev.agentring.app.R
+import dev.agentring.app.call.JoinOffer
 import dev.agentring.app.data.Pairing
 import dev.agentring.app.notify.Notifications
 import dev.agentring.app.push.PushState
@@ -121,6 +122,7 @@ private fun HomeScreen(pairing: Pairing) {
     val agent by Graph.connection.agentOnline.collectAsStateWithLifecycle()
     val push by Graph.push.state.collectAsStateWithLifecycle()
     val revoked by Graph.pairing.revoked.collectAsStateWithLifecycle()
+    val joinOffer by Graph.calls.joinOffer.collectAsStateWithLifecycle()
     val good = Color(0xFF2E7D32)
     val warn = Color(0xFFF9A825)
     val bad = MaterialTheme.colorScheme.error
@@ -130,6 +132,8 @@ private fun HomeScreen(pairing: Pairing) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text(pairing.agentName, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.testTag("agent_name"))
+
+        joinOffer?.let { JoinCallCard(it) }
 
         if (revoked) {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
@@ -175,6 +179,29 @@ private fun HomeScreen(pairing: Pairing) {
             Text(stringResource(R.string.call_agent))
         }
         Text(stringResource(R.string.call_soon), style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+/** A group call is going on without this phone: join it. */
+@Composable
+private fun JoinCallCard(offer: JoinOffer) {
+    val ctx = LocalContext.current
+    Card(
+        Modifier.fillMaxWidth().testTag("join_call_card"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.call_in_progress_with, offer.info.agentName), style = MaterialTheme.typography.titleMedium)
+            if (offer.info.reason.isNotBlank()) Text(offer.info.reason, style = MaterialTheme.typography.bodyMedium)
+            Button(
+                onClick = { ctx.startActivity(CallActivity.joinIntent(ctx, offer.info)) },
+                modifier = Modifier.fillMaxWidth().testTag("join_call"),
+            ) {
+                Icon(Icons.Filled.Call, null)
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.call_join))
+            }
+        }
     }
 }
 

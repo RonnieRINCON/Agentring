@@ -147,6 +147,103 @@ describe("calls", () => {
     expect(b.livekit.deleted).toContain(second.call_id);
   });
 
+  it("join: a phone that missed its ring, declined or hung up joins while the call is active", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const b = await app({ ringTimeoutS: 30 });
+    const a = await pairDevice(b, "A");
+    const c = await pairDevice(b, "B", "fcm-tok-2");
+    const d = await pairDevice(b, "C", "fcm-tok-3");
+    const { call } = (await placeCall(b)).json();
+    const post = (h: { authorization: string }, action: string, id = call.call_id) =>
+      b.app.inject({ method: "POST", url: `/v1/calls/${id}/${action}`, headers: h });
+
+    // C declines, A answers, B lets it ring out
+    await post(d.headers, "decline");
+    await post(a.headers, "accept");
+    vi.advanceTimersByTime(31_000);
+    expect(b.ctx.calls!.get(call.call_id)!.state).toBe("active");
+    // accept is only for ringing phones; join works at any time while active
+    expect((await post(c.headers, "accept")).json().error.code).toBe("invalid_state");
+    b.push.sent = [];
+    const jb = await post(c.headers, "join");
+    expect(jb.statusCode).toBe(200);
+    expect(jb.json().call).toMatchObject({ state: "active", device_id: a.device_id });
+    expect(jb.json().join).toMatchObject({ room: call.call_id, identity: `device_${c.device_id}` });
+    expect(eventsOf(b).at(-1)).toMatchObject({ type: "call.accept", by: "user", device_id: c.device_id });
+    // pushed at normal priority to the other phones (not to the one that joined)
+    await flush();
+    expect(b.push.sent.map((s) => s.target.deviceId).sort()).toEqual([a.device_id, d.device_id].sort());
+    expect(b.push.sent[0]!.opts).toMatchObject({ highPriority: false, ttlSeconds: 3600 });
+    expect(JSON.parse(b.push.sent[0]!.payload.event!)).toMatchObject({ type: "call.accept", device_id: c.device_id });
+    // the phone that declined joins too; joining again only renews the token
+    expect((await post(d.headers, "join")).statusCode).toBe(200);
+    const n = eventsOf(b).length;
+    expect((await post(d.headers, "join")).statusCode).toBe(200);
+    expect(eventsOf(b)).toHaveLength(n);
+
+    // A hangs up and comes back
+    expect((await post(a.headers, "end")).json().state).toBe("active");
+    expect((await post(a.headers, "join")).statusCode).toBe(200);
+    // everyone leaves: the last one ends the call
+    await post(a.headers, "end");
+    await post(c.headers, "end");
+    expect((await post(d.headers, "end")).json()).toMatchObject({ state: "ended", ended_by: "user" });
+    const late = await post(c.headers, "join");
+    expect(late.statusCode).toBe(409);
+    expect(late.json().error.code).toBe("call_ended");
+
+    // errors: unknown call, agent credentials
+    expect((await post(a.headers, "join", "call_01JB0000000000000000000000")).statusCode).toBe(404);
+    expect((await post(AGENT, "join")).statusCode).toBe(403);
+    const types = eventsOf(b).map((e) => e.type);
+    expect(types).toEqual(["call.invite", "call.decline", "call.accept", "call.accept", "call.accept", "call.accept", "call.end"]);
+  });
+
+  it("join while the call still rings is the same as accepting, also after declining", async () => {
+    const b = await app();
+    const a = await pairDevice(b, "A");
+    await pairDevice(b, "B", "fcm-tok-2");
+    const { call } = (await placeCall(b)).json();
+    await b.app.inject({ method: "POST", url: `/v1/calls/${call.call_id}/decline`, headers: a.headers });
+    const r = await b.app.inject({ method: "POST", url: `/v1/calls/${call.call_id}/join`, headers: a.headers });
+    expect(r.statusCode).toBe(200);
+    expect(r.json().call).toMatchObject({ state: "active", device_id: a.device_id });
+    expect(r.json().call.answered_at).toBeGreaterThan(0);
+    expect(eventsOf(b).map((e) => e.type)).toEqual(["call.invite", "call.decline", "call.accept"]);
+    // no ring timer left to fire on an answered call
+    expect((await b.app.inject({ method: "POST", url: `/v1/calls/${call.call_id}/end`, headers: AGENT })).json().state).toBe("ended");
+    const j = await b.app.inject({ method: "POST", url: `/v1/calls/${call.call_id}/join`, headers: a.headers });
+    expect(j.json().error.code).toBe("call_ended");
+  });
+
+  it("a stale LiveKit session leaving doesn't take a phone that rejoined off the call", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const b = await app({ ringTimeoutS: 30 });
+    const a = await pairDevice(b, "A");
+    const { call } = (await placeCall(b)).json();
+    const t0 = Date.now();
+    await b.app.inject({ method: "POST", url: `/v1/calls/${call.call_id}/accept`, headers: a.headers });
+    vi.advanceTimersByTime(60_000);
+    // A drops and rejoins with the same identity; LiveKit kicks the old session
+    await b.app.inject({ method: "POST", url: `/v1/calls/${call.call_id}/join`, headers: a.headers });
+    const left = (joinedAtMs: number) =>
+      b.app.inject({
+        method: "POST",
+        url: "/v1/livekit/webhook",
+        headers: { authorization: "ok", "content-type": "application/webhook+json" },
+        payload: JSON.stringify({
+          event: "participant_left",
+          room: { name: call.call_id },
+          participant: { identity: `device_${a.device_id}`, joinedAtMs: String(joinedAtMs) },
+        }),
+      });
+    await left(t0 + 500);
+    expect(b.ctx.calls!.get(call.call_id)!.state).toBe("active");
+    // the new session leaving is a real leave: last phone gone after the ring window
+    await left(Date.now() + 300);
+    expect(b.ctx.calls!.get(call.call_id)).toMatchObject({ state: "ended", end_reason: "room_closed" });
+  });
+
   it("rings out to missed after the timeout and survives a restart", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const b = await app({ ringTimeoutS: 5 });

@@ -10,17 +10,24 @@ import androidx.core.telecom.CallEndpointCompat
 import dev.agentring.app.Graph
 import dev.agentring.app.R
 import dev.agentring.app.ui.CallActivity
+import dev.agentring.core.Call
 import dev.agentring.core.Event
+import dev.agentring.core.JoinInfo
 import dev.agentring.core.RelayException
 import dev.agentring.core.RelayUrlPolicy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -31,6 +38,17 @@ data class CallInfo(
     val reason: String,
     val urgent: Boolean,
     val expiresAt: Long,
+) {
+    companion object {
+        fun of(call: Call) = CallInfo(call.callId, call.agentName, call.reason.orEmpty(), call.priority == "urgent", expiresAt = 0)
+    }
+}
+
+/** A group call from the agent in progress that this phone is not on: it can join. */
+data class JoinOffer(
+    val info: CallInfo,
+    /** When the call was first answered (wall clock), for the notification's timer. */
+    val answeredAt: Long?,
 )
 
 sealed interface CallUi {
@@ -53,6 +71,10 @@ sealed interface CallUi {
  * The one incoming call: ringing, answering, the voice session and hanging up.
  * Invites arrive by FCM (app in background) or WebSocket (app open); both are
  * de-duplicated by call id. All state changes happen on the main thread.
+ *
+ * Group calls: while the agent's call is active and this phone is not on it (its
+ * ring ended, it declined or hung up, or it never rang), [joinOffer] holds the
+ * call and an ongoing "Join" notification is shown; [join] gets this phone in.
  */
 class CallManager(private val context: Context) : TelecomBridge.Listener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -71,6 +93,19 @@ class CallManager(private val context: Context) : TelecomBridge.Listener {
     /** Collectors that live as long as the current call. */
     private val callJobs = mutableListOf<Job>()
 
+    private val _joinable = MutableStateFlow<JoinOffer?>(null)
+
+    /** The call this phone may join, while it is not on a call itself. */
+    val joinOffer: StateFlow<JoinOffer?> = combine(_joinable, _state) { j, s -> j.takeIf { s == null || s is CallUi.Ended } }
+        .distinctUntilChanged()
+        .stateIn(scope, SharingStarted.Eagerly, null)
+
+    init {
+        scope.launch {
+            joinOffer.collect { j -> if (j != null) CallNotifications.showJoin(context, j) else CallNotifications.cancelJoin(context) }
+        }
+    }
+
     // ---------------------------------------------------------------- incoming
 
     /**
@@ -88,6 +123,8 @@ class CallManager(private val context: Context) : TelecomBridge.Listener {
         synchronized(seen) {
             if (!seen.add(invite.callId)) return
             while (seen.size > 50) seen.remove(seen.first())
+            // One call at a time: a new invite means any older call is over.
+            if (_joinable.value?.info?.callId != invite.callId) _joinable.value = null
             val current = _state.value
             if (current != null && current !is CallUi.Ended) {
                 Log.w(TAG, "already in a call; ignoring ${invite.callId}")
@@ -126,7 +163,12 @@ class CallManager(private val context: Context) : TelecomBridge.Listener {
         // Don't ring past the relay's deadline even if the "missed" push never arrives.
         timeoutJob = scope.launch {
             delay((info.expiresAt - System.currentTimeMillis() + 2_000).coerceAtLeast(0))
-            if (isCurrent(info.callId) && _state.value is CallUi.Incoming) finish(info, R.string.call_missed, DisconnectCause.MISSED, notifyMissed = true)
+            if (isCurrent(info.callId) && _state.value is CallUi.Incoming) {
+                finish(info, R.string.call_missed, DisconnectCause.MISSED)
+                // Another phone may have answered: then offer to join instead of a missed call.
+                val call = withContext(Dispatchers.IO) { runCatching { Graph.api()?.getCall(info.callId) }.getOrNull() }
+                if (call?.isJoinable == true) offerJoin(call) else CallNotifications.showMissed(context, info)
+            }
         }
         telecomActive = Graph.settings.useTelecom && telecom.addIncoming(info.agentName, info.callId, this)
         Log.i(TAG, "telecom: $telecomActive")
@@ -147,47 +189,110 @@ class CallManager(private val context: Context) : TelecomBridge.Listener {
         CallService.promoteToActive(context)
         scope.launch {
             val join = try {
-                withContext(Dispatchers.IO) { Graph.api()!!.acceptCall(info.callId).join }
+                withContext(Dispatchers.IO) { acceptOrJoin(info.callId) }
             } catch (e: RelayException) {
                 Log.w(TAG, "accept failed: ${e.code}")
-                finish(info, if (e.code == "invalid_state") R.string.call_unavailable else R.string.call_failed, DisconnectCause.ERROR)
+                finish(info, if (e.code == "invalid_state" || e.code == "call_ended") R.string.call_unavailable else R.string.call_failed, DisconnectCause.ERROR)
                 return@launch
             } catch (e: Exception) {
                 Log.w(TAG, "accept failed", e)
                 finish(info, R.string.call_failed, DisconnectCause.ERROR)
                 return@launch
             }
-            try {
-                RelayUrlPolicy.checkLiveKit(join.livekitUrl)
-            } catch (e: IllegalArgumentException) {
-                Log.e(TAG, "refusing LiveKit URL from relay: ${e.message}")
-                withContext(Dispatchers.IO) { runCatching { Graph.api()?.endCall(info.callId) } }
-                finish(info, R.string.call_failed, DisconnectCause.ERROR)
+            connect(info, join)
+        }
+    }
+
+    /** Blocking. Accept while ringing; if the ring window closed meanwhile, join the call instead. */
+    private fun acceptOrJoin(callId: String): JoinInfo {
+        val api = Graph.api()!!
+        return try {
+            api.acceptCall(callId).join
+        } catch (e: RelayException) {
+            if (e.code != "invalid_state") throw e
+            api.joinCall(callId).join
+        }
+    }
+
+    /**
+     * "Join the call": gets this phone into an agent call in progress that it is
+     * not on. Called from the Join notification / button (the app is in the
+     * foreground, so the microphone foreground service is allowed).
+     */
+    fun join(info: CallInfo) {
+        val cur = _state.value
+        if (cur != null && cur !is CallUi.Ended) {
+            if (cur is CallUi.Incoming && cur.info.callId == info.callId) answer()
+            return
+        }
+        synchronized(seen) { seen.add(info.callId) } // a replayed invite must not ring now
+        _joinable.value = null
+        _state.value = CallUi.Connecting(info)
+        CallService.promoteToActive(context)
+        scope.launch {
+            val request = async(Dispatchers.IO) { runCatching { Graph.api()!!.joinCall(info.callId).join } }
+            val stillJoining = { isCurrent(info.callId) && _state.value is CallUi.Connecting }
+            val added = Graph.settings.useTelecom && telecom.addOutgoing(info.agentName, info.callId, this@CallManager)
+            if (added && !stillJoining()) {
+                // Hung up while Telecom was adding the call: don't leave a ghost call behind.
+                telecom.disconnect(DisconnectCause.LOCAL)
+            } else if (added) {
+                telecomActive = true
+                telecom.activate()
+            }
+            Log.i(TAG, "joining ${info.callId}, telecom: $telecomActive")
+            val join = request.await().getOrElse { e ->
+                Log.w(TAG, "join failed", e)
+                val over = e is RelayException && e.code == "call_ended"
+                finish(info, if (over) R.string.call_unavailable else R.string.call_failed, DisconnectCause.ERROR)
+                if (!over) recheckJoinable(info.callId)
                 return@launch
             }
-            prefs.edit { putString(KEY_LAST_LIVEKIT_URL, join.livekitUrl) }
-            val s = session ?: VoiceSession(context, scope, telecomActive).also { session = it }
-            watch(info, s)
-            val t0 = SystemClock.elapsedRealtime()
-            try {
-                s.connect(join.livekitUrl, join.livekitToken, withMic = CallPermissions.hasMic(context))
-            } catch (e: Exception) {
-                Log.w(TAG, "LiveKit connect failed", e)
-                withContext(Dispatchers.IO) { runCatching { Graph.api()?.endCall(info.callId) } }
-                finish(info, R.string.call_failed, DisconnectCause.ERROR)
+            if (!stillJoining()) {
+                // Hung up before the relay answered: leave again so the relay doesn't count us in.
+                withContext(Dispatchers.IO) { runCatching { Graph.api()?.endCall(info.callId) }.getOrNull() }?.let(::offerJoin)
                 return@launch
             }
-            Log.i(TAG, "in the room after ${SystemClock.elapsedRealtime() - t0} ms")
-            if (isCurrent(info.callId) && _state.value is CallUi.Connecting) {
-                _state.value = CallUi.Active(info, since = SystemClock.elapsedRealtime(), speaker = speakerOn())
-                CallService.refresh()
-            }
+            connect(info, join)
+        }
+    }
+
+    /** Joins the LiveKit room with a fresh token, for an answered or joined call. */
+    private suspend fun connect(info: CallInfo, join: JoinInfo) {
+        try {
+            RelayUrlPolicy.checkLiveKit(join.livekitUrl)
+        } catch (e: IllegalArgumentException) {
+            Log.e(TAG, "refusing LiveKit URL from relay: ${e.message}")
+            withContext(Dispatchers.IO) { runCatching { Graph.api()?.endCall(info.callId) } }
+            finish(info, R.string.call_failed, DisconnectCause.ERROR)
+            return
+        }
+        prefs.edit { putString(KEY_LAST_LIVEKIT_URL, join.livekitUrl) }
+        val s = session ?: VoiceSession(context, scope, telecomActive).also { session = it }
+        watch(info, s)
+        val t0 = SystemClock.elapsedRealtime()
+        try {
+            s.connect(join.livekitUrl, join.livekitToken, withMic = CallPermissions.hasMic(context))
+        } catch (e: Exception) {
+            Log.w(TAG, "LiveKit connect failed", e)
+            val call = withContext(Dispatchers.IO) { runCatching { Graph.api()?.endCall(info.callId) }.getOrNull() }
+            finish(info, R.string.call_failed, DisconnectCause.ERROR)
+            call?.let(::offerJoin)
+            return
+        }
+        Log.i(TAG, "in the room after ${SystemClock.elapsedRealtime() - t0} ms")
+        if (isCurrent(info.callId) && _state.value is CallUi.Connecting) {
+            _state.value = CallUi.Active(info, since = SystemClock.elapsedRealtime(), speaker = speakerOn())
+            CallService.refresh()
         }
     }
 
     fun decline() {
         val cur = _state.value as? CallUi.Incoming ?: return
-        scope.launch(Dispatchers.IO) { runCatching { Graph.api()?.declineCall(cur.info.callId) } }
+        // If another phone is already on the call, this one can still join it later.
+        scope.launch {
+            withContext(Dispatchers.IO) { runCatching { Graph.api()?.declineCall(cur.info.callId) }.getOrNull() }?.let(::offerJoin)
+        }
         finish(cur.info, R.string.call_declined, DisconnectCause.REJECTED)
     }
 
@@ -196,7 +301,10 @@ class CallManager(private val context: Context) : TelecomBridge.Listener {
         when (cur) {
             is CallUi.Incoming -> decline()
             is CallUi.Connecting, is CallUi.Active -> {
-                scope.launch(Dispatchers.IO) { runCatching { Graph.api()?.endCall(cur.info.callId) } }
+                // Leaving a group call: the others may still be on it, so this phone can rejoin.
+                scope.launch {
+                    withContext(Dispatchers.IO) { runCatching { Graph.api()?.endCall(cur.info.callId) }.getOrNull() }?.let(::offerJoin)
+                }
                 finish(cur.info, R.string.call_ended, DisconnectCause.LOCAL)
             }
             is CallUi.Ended -> Unit
@@ -231,9 +339,22 @@ class CallManager(private val context: Context) : TelecomBridge.Listener {
     private fun speakerOn(): Boolean =
         if (telecomActive) telecom.endpoint.value?.type == CallEndpointCompat.TYPE_SPEAKER else session?.speakerOn == true
 
-    /** Relay events (push or WebSocket) about a call we may be showing. */
+    /** Relay events (push or WebSocket) about a call we may be showing or may join. */
     fun onCallEvent(event: Event) {
         scope.launch {
+            when (event) {
+                is Event.CallEnd -> if (_joinable.value?.info?.callId == event.callId) _joinable.value = null
+                is Event.CallMissed -> if (_joinable.value?.info?.callId == event.callId) _joinable.value = null
+                // Another phone answered or joined an agent call: offer to join it if we're not on it.
+                is Event.CallAnswer -> if (event.type == "call.accept" && event.by == "user" &&
+                    event.deviceId != Graph.pairing.current?.deviceId &&
+                    _state.value.let { it == null || it is CallUi.Ended || it.info.callId != event.callId } &&
+                    _joinable.value?.info?.callId != event.callId
+                ) {
+                    recheckJoinable(event.callId)
+                }
+                else -> Unit
+            }
             val cur = _state.value ?: return@launch
             val info = cur.info
             when (event) {
@@ -261,7 +382,10 @@ class CallManager(private val context: Context) : TelecomBridge.Listener {
                     VoiceSession.Signal.Reconnected -> if (cur != null) _state.value = cur.copy(reconnecting = false)
                     is VoiceSession.Signal.Gone -> if (isCurrent(info.callId) && _state.value !is CallUi.Ended) {
                         Log.i(TAG, "voice session gone: ${sig.reason}")
-                        scope.launch(Dispatchers.IO) { runCatching { Graph.api()?.endCall(info.callId) } }
+                        scope.launch {
+                            // Lost the connection while others are still talking: offer to rejoin.
+                            withContext(Dispatchers.IO) { runCatching { Graph.api()?.endCall(info.callId) }.getOrNull() }?.let(::offerJoin)
+                        }
                         finish(info, R.string.call_ended_by_agent, DisconnectCause.REMOTE)
                     }
                     null -> Unit
@@ -273,6 +397,34 @@ class CallManager(private val context: Context) : TelecomBridge.Listener {
                 val cur = _state.value as? CallUi.Active ?: return@collect
                 if (ep != null) _state.value = cur.copy(speaker = ep.type == CallEndpointCompat.TYPE_SPEAKER)
             }
+        }
+    }
+
+    // ---------------------------------------------------------------- join offer
+
+    /** Offers "Join" for [call] if it is an agent call in progress and this phone is not on it. */
+    private fun offerJoin(call: Call) {
+        if (!call.isJoinable) {
+            if (_joinable.value?.info?.callId == call.callId) _joinable.value = null
+            return
+        }
+        val cur = _state.value
+        if (cur != null && cur !is CallUi.Ended && cur.info.callId == call.callId) return
+        _joinable.value = JoinOffer(CallInfo.of(call), call.answeredAt)
+    }
+
+    /** Asks the relay whether [callId] can be joined (events may be stale or replayed). */
+    private fun recheckJoinable(callId: String) {
+        scope.launch {
+            val call = withContext(Dispatchers.IO) { runCatching { Graph.api()?.getCall(callId) }.getOrNull() } ?: return@launch
+            offerJoin(call)
+        }
+    }
+
+    /** The relay's view of the open call (`active_call` in /v1/status), e.g. when the app comes to the foreground. */
+    fun onActiveCall(call: Call?) {
+        scope.launch {
+            if (call == null) _joinable.value = null else offerJoin(call)
         }
     }
 

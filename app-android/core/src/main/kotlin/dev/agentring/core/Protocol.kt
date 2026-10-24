@@ -98,6 +98,8 @@ data class Status(
     @SerialName("agent_name") val agentName: String,
     @SerialName("agent_online") val agentOnline: Boolean,
     @SerialName("push_provider") val pushProvider: String,
+    /** The call currently ringing or active, if any. */
+    @SerialName("active_call") val activeCall: Call? = null,
 )
 
 @Serializable
@@ -117,6 +119,10 @@ data class Call(
     @SerialName("device_id") val deviceId: String? = null,
 ) {
     val isRinging: Boolean get() = state == "ringing"
+    val isActive: Boolean get() = state == "active"
+
+    /** A group call from the agent that is in progress: a phone not on it may join. */
+    val isJoinable: Boolean get() = isActive && direction == "agent_to_user"
 }
 
 @Serializable

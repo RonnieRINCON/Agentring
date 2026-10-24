@@ -111,6 +111,54 @@ class CoreTest {
     }
 
     @Test
+    fun `join call and active call in status`() {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse().setBody(
+                    """{"relay_id":"rly_1","version":"0.1.0","agent_name":"Claude","agent_online":true,"push_provider":"fcm",
+                       "active_call":{"call_id":"call_1","direction":"agent_to_user","state":"active","priority":"normal",
+                       "agent_name":"Claude","created_at":1,"answered_at":2,"device_id":"dev_2"}}""",
+                ),
+            )
+            server.enqueue(MockResponse().setBody("""{"relay_id":"rly_1","version":"0.1.0","agent_name":"Claude","agent_online":true,"push_provider":"fcm","active_call":null}"""))
+            server.enqueue(
+                MockResponse().setBody(
+                    """{"call":{"call_id":"call_1","direction":"agent_to_user","state":"active","priority":"normal","agent_name":"Claude",
+                       "created_at":1,"answered_at":2,"device_id":"dev_2"},
+                       "join":{"livekit_url":"wss://r","livekit_token":"t","room":"call_1","identity":"device_dev_1","expires_at":3}}""",
+                ),
+            )
+            server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":{"code":"call_ended","message":"Call is ended"}}"""))
+
+            val api = RelayApi(server.url("/").toString(), "jwt")
+            val active = api.status().activeCall!!
+            assertTrue(active.isJoinable)
+            assertEquals(2L, active.answeredAt)
+            server.takeRequest()
+            assertNull(api.status().activeCall)
+            server.takeRequest()
+
+            val j = api.joinCall("call_1")
+            assertEquals("device_dev_1", j.join.identity)
+            val r = server.takeRequest()
+            assertEquals("POST", r.method)
+            assertEquals("/v1/calls/call_1/join", r.path)
+            assertEquals("Bearer jwt", r.getHeader("Authorization"))
+
+            try {
+                api.joinCall("call_1")
+                fail("expected 409")
+            } catch (e: RelayException) {
+                assertEquals(409, e.status)
+                assertEquals("call_ended", e.code)
+            }
+        }
+        val userCall = Call("call_2", "user_to_agent", "active", priority = "normal", agentName = "Claude", createdAt = 1)
+        assertFalse(userCall.isJoinable)
+        assertFalse(userCall.copy(direction = "agent_to_user", state = "ended").isJoinable)
+    }
+
+    @Test
     fun `relay api speaks the protocol`() {
         MockWebServer().use { server ->
             server.enqueue(

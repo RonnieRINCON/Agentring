@@ -92,6 +92,10 @@
     <string name="call_unavailable">This call is no longer available</string>
     <string name="call_answered_elsewhere">Answered on another device</string>
     <string name="call_failed">Couldn\'t connect the call</string>
+    <string name="channel_calls_in_progress">Calls in progress</string>
+    <string name="call_in_progress_with">Call in progress with %1$s</string>
+    <string name="call_join">Join</string>
+    <string name="call_join_hint">Join the call</string>
     <string name="perm_title">Ready to take calls</string>
     <string name="perm_body">Your agent\'s calls should ring even with the phone locked. Fix anything marked below.</string>
     <string name="perm_notifications">Notifications</string>

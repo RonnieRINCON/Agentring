@@ -49,7 +49,7 @@ Every event is a flat JSON object:
 |---|---|---|---|
 | `call.invite` | `call_id, direction, agent_name, reason, priority, expires_at` | ✓ | a call is created; addressed to the callee side |
 | `call.ringing` | `call_id, device_id` | ✓ | a device shows the incoming call UI |
-| `call.accept` | `call_id, by, device_id?` | ✓ | a callee answered (in a group call, once per phone that joins) |
+| `call.accept` | `call_id, by, device_id?` | ✓ | a callee answered (in a group call, once per phone that joins, by `accept` or `join`) |
 | `call.decline` | `call_id, by, device_id?` | ✓ | a callee declined (in a group call, only that phone) |
 | `call.end` | `call_id, by, reason, duration_ms?` | ✓ | either side hung up, caller canceled while ringing, or LiveKit closed the room |
 | `call.missed` | `call_id` | ✓ | no answer after `RING_TIMEOUT_S` (default 30) |
@@ -132,11 +132,16 @@ Which events are pushed to devices:
 |---|---|---|
 | `call.invite` (`agent_to_user`) | until `expires_at` (≤ 30 s) | ring |
 | `call.end` / `call.missed` of an agent call | 30 s | stop ringing / tear down the call screen on all devices |
-
-`call.accept` and `call.decline` are not pushed: in a group call they don't
-change anything for the other phones, and high-priority pushes that show nothing
-get an app's later pushes deprioritized by FCM.
+| `call.accept` of an agent call (**normal** priority), to every phone except the one that joined | 1 h | offer "join the call" on the phones that are not on it |
 | `msg.new` (`from: agent`) | 28 days | notification |
+
+`call.accept` goes at normal priority: a phone still ringing has nothing to show
+for it, and high-priority pushes that show nothing get an app's later pushes
+deprioritized by FCM; a phone in Doze gets it at its next maintenance window or
+when the screen turns on, which is soon enough to offer "join". The TTL is long
+so a phone that was offline during the ring still learns about the call; the app
+checks the call (`GET /v1/calls/{call_id}`) before offering anything.
+`call.decline` is not pushed: one phone declining changes nothing for the others.
 
 An `UNREGISTERED` FCM response clears the device's token (the app will
 re-send it via `POST /v1/device/fcm` on next start/refresh).
@@ -222,8 +227,28 @@ Every paired phone rings. Each may answer while the call rings (until
 `expires_at`); they all join the same room and hear the agent and each other.
 A phone declining or hanging up only affects itself. The call ends when the
 agent hangs up, or when the last phone leaves (once nobody else can still
-answer). It is `declined` only if every phone declined, `missed` if nobody
-answered.
+answer, i.e. after the ring window or when no phone is still ringing). It is
+`declined` only if every phone declined, `missed` if nobody answered.
+
+**Join the call.** While the call is `active`, any paired phone that is not on
+it (its ring ended, it declined, it hung up, or it never got the invite) may join
+at any time with `POST /v1/calls/{call_id}/join` → `{ call, join }` (same
+`JoinInfo` as accept). While the call still rings, `join` is the same as
+`accept`, so a client can always use it for "join". It emits `call.accept` with
+the phone's `device_id`; a phone already on the call just gets a new token.
+`409 call_ended` once the call is `ended`/`missed`/`declined`/`canceled`. An
+empty call still ends (rule above), so "join" is only offered while someone is
+on it.
+
+How a phone learns it can join: the `call.accept` push (or WebSocket event) of
+another phone, the response of its own `decline` / `end` (state still `active`),
+its own ring timing out locally (it checks `GET /v1/calls/{call_id}`), and
+`active_call` in `GET /v1/status` when the app comes to the foreground. It stops
+offering it on `call.end` / `call.missed` or a `409 call_ended`.
+
+A LiveKit `participant_left` for a phone's older session (e.g. kicked by its
+own rejoin with the same identity) does not take it off the call: the relay
+compares the session's join time with the phone's latest join.
 
 ### LiveKit
 

@@ -56,11 +56,15 @@ const invalidState = (state: CallState) => new ApiError(409, "invalid_state", `C
  *   ringing ─decline→ declined | ─timeout→ missed | ─caller end→ canceled
  *
  * Group calls (agent → user): every paired phone rings and each one may answer
- * until `expires_at`; they all join the same room. A phone hanging up only leaves;
- * the call ends when the agent hangs up or the last phone leaves. The call is
- * `declined` only when every ringing phone declined.
+ * until `expires_at`; they all join the same room. While the call is active any
+ * paired phone may also join it later (`join`), e.g. after its ring ended, after
+ * declining or after hanging up. A phone hanging up only leaves; the call ends
+ * when the agent hangs up or the last phone leaves. The call is `declined` only
+ * when every ringing phone declined.
  */
 type PartState = "ringing" | "joined" | "declined" | "missed" | "left";
+/** LiveKit reports join times in its own clock (second precision on older servers). */
+const JOIN_CLOCK_SLACK_MS = 2_000;
 export class Calls {
   private readonly timers = new Map<string, NodeJS.Timeout>();
   /** Devices that already reported `ringing`, so the event is emitted once per device. */
@@ -85,10 +89,13 @@ export class Calls {
   }
 
   private part(callId: string, deviceId: string): PartState | undefined {
-    const r = this.ctx.db
-      .prepare("SELECT state FROM call_participants WHERE call_id = ? AND device_id = ?")
-      .get(callId, deviceId) as { state: PartState } | undefined;
-    return r?.state;
+    return this.partRow(callId, deviceId)?.state;
+  }
+
+  private partRow(callId: string, deviceId: string): { state: PartState; updated_at: number } | undefined {
+    return this.ctx.db
+      .prepare("SELECT state, updated_at FROM call_participants WHERE call_id = ? AND device_id = ?")
+      .get(callId, deviceId) as { state: PartState; updated_at: number } | undefined;
   }
 
   private setPart(callId: string, deviceId: string, state: PartState): void {
@@ -186,30 +193,51 @@ export class Calls {
     const now = Date.now();
     if (p.kind === "device") {
       const prev = this.part(callId, p.deviceId);
-      if (c.state === "active" && prev === "joined") return c; // rejoin after a drop
+      if (c.state === "active" && prev === "joined") return this.rejoin(c, p.deviceId); // rejoin after a drop
       const ringing = c.state === "ringing" || (c.state === "active" && now <= c.expires_at);
       if (!ringing || (prev !== undefined && prev !== "ringing")) throw invalidState(c.state === "active" ? "active" : c.state);
-      if (c.state === "ringing") {
-        this.ctx.db
-          .prepare("UPDATE calls SET state = 'active', answered_at = ?, device_id = ? WHERE call_id = ? AND state = 'ringing'")
-          .run(now, p.deviceId, callId);
-      }
-      this.setPart(callId, p.deviceId, "joined");
-    } else {
-      const res = this.ctx.db
-        .prepare("UPDATE calls SET state = 'active', answered_at = ? WHERE call_id = ? AND state = 'ringing'")
-        .run(now, callId);
-      if (res.changes !== 1) throw invalidState(this.get(callId)!.state);
-      this.settle(callId);
+      return this.joinDevice(c, p.deviceId);
     }
-    this.ringingDevices.get(callId)?.delete(p.kind === "device" ? p.deviceId : "");
-    this.ctx.events.emit({
-      type: "call.accept",
-      call_id: callId,
-      by: p.kind === "agent" ? "agent" : "user",
-      ...(p.kind === "device" ? { device_id: p.deviceId } : {}),
-    });
+    const res = this.ctx.db
+      .prepare("UPDATE calls SET state = 'active', answered_at = ? WHERE call_id = ? AND state = 'ringing'")
+      .run(now, callId);
+    if (res.changes !== 1) throw invalidState(this.get(callId)!.state);
+    this.settle(callId);
+    this.ctx.events.emit({ type: "call.accept", call_id: callId, by: "agent" });
     return this.get(callId)!;
+  }
+
+  /**
+   * "Join the call": any paired phone that is not on an agent call may join it
+   * while it is ringing or active, also after its ring window, after declining or
+   * after hanging up. While the call rings this is the same as accepting.
+   */
+  join(callId: string, deviceId: string): CallRow {
+    const c = this.get(callId);
+    if (!c) throw notFound("Call");
+    if (c.direction !== "agent_to_user") throw forbidden("Only calls from the agent can be joined");
+    if (c.state !== "ringing" && c.state !== "active") throw new ApiError(409, "call_ended", `Call is ${c.state}`);
+    if (c.state === "active" && this.part(callId, deviceId) === "joined") return this.rejoin(c, deviceId);
+    return this.joinDevice(c, deviceId);
+  }
+
+  /** A phone already on the call asks for a new token: no event, but its join time moves on. */
+  private rejoin(c: CallRow, deviceId: string): CallRow {
+    this.setPart(c.call_id, deviceId, "joined");
+    return c;
+  }
+
+  /** A phone joins the room; the first one moves a ringing call to `active`. Emits `call.accept`. */
+  private joinDevice(c: CallRow, deviceId: string): CallRow {
+    if (c.state === "ringing") {
+      this.ctx.db
+        .prepare("UPDATE calls SET state = 'active', answered_at = ?, device_id = ? WHERE call_id = ? AND state = 'ringing'")
+        .run(Date.now(), deviceId, c.call_id);
+    }
+    this.setPart(c.call_id, deviceId, "joined");
+    this.ringingDevices.get(c.call_id)?.delete(deviceId);
+    this.ctx.events.emit({ type: "call.accept", call_id: c.call_id, by: "user", device_id: deviceId });
+    return this.get(c.call_id)!;
   }
 
   /**
@@ -267,9 +295,17 @@ export class Calls {
     return this.finish(callId, "active", "ended", by, "hangup") ?? this.get(callId)!;
   }
 
-  /** A phone left the room (LiveKit webhook): same as hanging up. */
-  deviceLeft(callId: string, deviceId: string): void {
-    if (this.part(callId, deviceId) === "joined") this.leave(callId, deviceId, "relay", "room_closed");
+  /**
+   * A phone left the room (LiveKit webhook): same as hanging up. `sessionJoinedAt`
+   * is when that LiveKit session joined; a session older than the phone's latest
+   * join is a stale one (e.g. kicked by its own rejoin with the same identity) and
+   * must not take the phone off the call.
+   */
+  deviceLeft(callId: string, deviceId: string, sessionJoinedAt?: number): void {
+    const p = this.partRow(callId, deviceId);
+    if (p?.state !== "joined") return;
+    if (sessionJoinedAt !== undefined && sessionJoinedAt < p.updated_at - JOIN_CLOCK_SLACK_MS) return;
+    this.leave(callId, deviceId, "relay", "room_closed");
   }
 
   /** The room went away, or the agent left it (LiveKit webhook). */
@@ -360,6 +396,14 @@ export class Calls {
     if (!lk) return;
     lk.deleteRoom(roomName(callId)).catch(() => undefined);
   }
+}
+
+/** When a LiveKit participant session joined, in ms, if the webhook says. */
+function sessionJoinedAt(p: { joinedAt?: unknown; joinedAtMs?: unknown } | undefined): number | undefined {
+  const ms = Number(p?.joinedAtMs ?? 0);
+  if (ms > 0) return ms;
+  const s = Number(p?.joinedAt ?? 0);
+  return s > 0 ? s * 1000 : undefined;
 }
 
 const CALL_ID = { type: "object", properties: { call_id: { type: "string", pattern: "^call_[0-9A-HJKMNP-TV-Z]{26}$" } } } as const;
@@ -457,6 +501,18 @@ export function callRoutes(app: FastifyInstance, ctx: Ctx, calls: Calls): void {
   );
 
   app.post<{ Params: { call_id: string } }>(
+    "/v1/calls/:call_id/join",
+    { preHandler: requireAuth(ctx, "device"), schema: { params: CALL_ID } },
+    async (req) => {
+      const p = principal(req);
+      if (p.kind !== "device") throw new Error("unreachable");
+      livekit();
+      const row = calls.join(req.params.call_id, p.deviceId);
+      return { call: callFromRow(row), join: await joinFor(row.call_id, p) };
+    },
+  );
+
+  app.post<{ Params: { call_id: string } }>(
     "/v1/calls/:call_id/decline",
     { preHandler: auth, schema: { params: CALL_ID } },
     async (req) => callFromRow(calls.decline(req.params.call_id, principal(req))),
@@ -492,7 +548,7 @@ export function callRoutes(app: FastifyInstance, ctx: Ctx, calls: Calls): void {
           calls.roomClosed(c.call_id);
         } else if (left && identity.startsWith("device_")) {
           const deviceId = identity.slice("device_".length);
-          if (c.direction === "agent_to_user") calls.deviceLeft(c.call_id, deviceId);
+          if (c.direction === "agent_to_user") calls.deviceLeft(c.call_id, deviceId, sessionJoinedAt(event.participant));
           else if (deviceId === c.device_id) calls.roomClosed(c.call_id);
         }
       }
