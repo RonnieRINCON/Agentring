@@ -7,7 +7,6 @@ import time
 from typing import Any
 
 from ..relay_client import RelayError
-from .session import CallInfo
 
 log = logging.getLogger("agentring.voice")
 
@@ -19,9 +18,11 @@ def is_incoming_call(event: dict[str, Any], now: float | None = None) -> bool:
     return (event.get("expires_at") or 0) / 1000 > (time.time() if now is None else now)
 
 
-def accept_incoming(client: Any, event: dict[str, Any]) -> tuple[CallInfo, dict[str, Any]] | None:
+def accept_incoming(client: Any, event: dict[str, Any]) -> tuple[Any, dict[str, Any]] | None:
     """Accepts an incoming call. Returns what VoiceAgent.run needs, or None if it isn't
     one (or someone else took it first). `client` is a RelayClient."""
+    from .session import CallInfo
+
     if not is_incoming_call(event):
         return None
     try:

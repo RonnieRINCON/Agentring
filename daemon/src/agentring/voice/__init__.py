@@ -4,15 +4,25 @@
 
     agent = VoiceAgent(lambda: GeminiLive(api_key), "You are my assistant…", tools=[Tool(...)])
     result = await agent.run(CallInfo(call_id, reason), join, relay=client)
+
+Names load lazily, so `agentring.voice.inbound` (relay side only) works without LiveKit installed.
 """
 
-from .backend import RealtimeBackend, ToolResult
-from .gemini import GeminiLive
-from .inbound import accept_incoming, is_incoming_call
-from .session import CallInfo, CallResult, CallSession, Prompts, VoiceAgent
-from .tools import McpClient, Tool, ToolCall, mcp_tools
+from importlib import import_module
+from typing import Any
 
-__all__ = [
-    "CallInfo", "CallResult", "CallSession", "GeminiLive", "McpClient", "Prompts", "RealtimeBackend", "Tool",
-    "ToolCall", "ToolResult", "VoiceAgent", "accept_incoming", "is_incoming_call", "mcp_tools",
-]
+_WHERE = {
+    "RealtimeBackend": "backend", "ToolResult": "backend",
+    "GeminiLive": "gemini",
+    "accept_incoming": "inbound", "is_incoming_call": "inbound",
+    "CallInfo": "session", "CallResult": "session", "CallSession": "session", "Prompts": "session",
+    "VoiceAgent": "session",
+    "McpClient": "tools", "Tool": "tools", "ToolCall": "tools", "mcp_tools": "tools",
+}
+__all__ = sorted(_WHERE)
+
+
+def __getattr__(name: str) -> Any:
+    if name not in _WHERE:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return getattr(import_module(f".{_WHERE[name]}", __name__), name)
