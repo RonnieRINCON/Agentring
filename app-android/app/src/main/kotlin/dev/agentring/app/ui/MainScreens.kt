@@ -1,5 +1,8 @@
 package dev.agentring.app.ui
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -55,11 +58,15 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.agentring.app.BuildConfig
 import dev.agentring.app.Graph
 import dev.agentring.app.R
+import dev.agentring.app.call.CallPermissions
+import dev.agentring.app.call.CallUi
 import dev.agentring.app.call.JoinOffer
 import dev.agentring.app.data.Pairing
 import dev.agentring.app.notify.Notifications
 import dev.agentring.app.push.PushState
 import dev.agentring.core.RelaySocket
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 private enum class Tab { HOME, MESSAGES, SETTINGS }
 
@@ -173,13 +180,56 @@ private fun HomeScreen(pairing: Pairing) {
         if (!rememberCallsReady()) CallReadinessCard()
 
         Spacer(Modifier.height(8.dp))
-        Button(onClick = {}, enabled = false, modifier = Modifier.fillMaxWidth().height(56.dp)) {
-            Icon(Icons.Filled.Call, null)
-            Spacer(Modifier.width(8.dp))
-            Text(stringResource(R.string.call_agent))
-        }
-        Text(stringResource(R.string.call_soon), style = MaterialTheme.typography.bodySmall)
+        CallAgentButton(pairing, relayConnected = relay == RelaySocket.State.CONNECTED, agentOnline = agent == true, revoked = revoked)
     }
+}
+
+/** "Call agent" (M4): places a call to the agent and opens the call screen. */
+@Composable
+private fun CallAgentButton(pairing: Pairing, relayConnected: Boolean, agentOnline: Boolean, revoked: Boolean) {
+    val ctx = LocalContext.current
+    val call by Graph.calls.state.collectAsStateWithLifecycle()
+    var placing by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(relayConnected, agentOnline) { error = null }
+    val idle = call == null || call is CallUi.Ended
+
+    fun place() {
+        placing = true
+        error = null
+        // Not the composition's scope: leaving the screen mid-request must not orphan a ringing call.
+        Graph.appScope.launch(Dispatchers.Main.immediate) {
+            val failure = Graph.calls.callAgent()
+            placing = false
+            if (failure == null) ctx.startActivity(CallActivity.outgoingIntent(ctx)) else error = failure
+        }
+    }
+    // Go on either way: without the microphone the user can still hear the agent.
+    val mic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { place() }
+
+    Button(
+        onClick = { if (CallPermissions.hasMic(ctx)) place() else mic.launch(Manifest.permission.RECORD_AUDIO) },
+        enabled = relayConnected && agentOnline && idle && !placing && !revoked,
+        modifier = Modifier.fillMaxWidth().height(56.dp).testTag("call_agent"),
+    ) {
+        Icon(Icons.Filled.Call, null)
+        Spacer(Modifier.width(8.dp))
+        Text(stringResource(R.string.call_agent))
+    }
+    val hint = when {
+        error != null -> stringResource(error!!)
+        placing -> stringResource(R.string.call_calling, pairing.agentName)
+        !relayConnected -> stringResource(R.string.call_agent_needs_relay)
+        !agentOnline -> stringResource(R.string.call_agent_offline)
+        !idle -> stringResource(R.string.call_agent_in_call)
+        else -> stringResource(R.string.call_agent_hint, pairing.agentName)
+    }
+    Text(
+        hint,
+        style = MaterialTheme.typography.bodySmall,
+        color = if (error != null) MaterialTheme.colorScheme.error else Color.Unspecified,
+        modifier = Modifier.testTag("call_agent_hint"),
+    )
 }
 
 /** A group call is going on without this phone: join it. */

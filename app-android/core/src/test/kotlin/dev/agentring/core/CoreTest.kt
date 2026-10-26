@@ -159,6 +159,51 @@ class CoreTest {
     }
 
     @Test
+    fun `create call to the agent`() {
+        MockWebServer().use { server ->
+            server.enqueue(
+                MockResponse().setResponseCode(201).setBody(
+                    """{"call":{"call_id":"call_9","direction":"user_to_agent","state":"ringing","priority":"normal","agent_name":"Claude",
+                       "created_at":1,"device_id":"dev_1"},
+                       "join":{"livekit_url":"wss://r","livekit_token":"t","room":"call_9","identity":"device_dev_1","expires_at":3}}""",
+                ),
+            )
+            server.enqueue(MockResponse().setResponseCode(201).setBody(
+                """{"call":{"call_id":"call_10","direction":"user_to_agent","state":"ringing","priority":"normal","agent_name":"Claude","created_at":1},
+                   "join":{"livekit_url":"wss://r","livekit_token":"t","room":"call_10","identity":"device_dev_1","expires_at":3}}""",
+            ))
+            server.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":{"code":"agent_offline","message":"The agent is not connected"}}"""))
+            server.enqueue(MockResponse().setResponseCode(409).setBody("""{"error":{"code":"busy","message":"Another call is ringing or active"}}"""))
+
+            val api = RelayApi(server.url("/").toString(), "jwt")
+            val c = api.createCall()
+            assertEquals("call_9", c.call.callId)
+            assertEquals("user_to_agent", c.call.direction)
+            assertTrue(c.call.isRinging)
+            assertFalse(c.call.isJoinable)
+            assertEquals("device_dev_1", c.join.identity)
+            val r = server.takeRequest()
+            assertEquals("POST", r.method)
+            assertEquals("/v1/calls", r.path)
+            assertEquals("Bearer jwt", r.getHeader("Authorization"))
+            assertEquals("{}", r.body.readUtf8())
+
+            api.createCall("quick question")
+            assertEquals("""{"reason":"quick question"}""", server.takeRequest().body.readUtf8())
+
+            for (expected in listOf(503 to "agent_offline", 409 to "busy")) {
+                try {
+                    api.createCall()
+                    fail("expected ${expected.first}")
+                } catch (e: RelayException) {
+                    assertEquals(expected.first, e.status)
+                    assertEquals(expected.second, e.code)
+                }
+            }
+        }
+    }
+
+    @Test
     fun `relay api speaks the protocol`() {
         MockWebServer().use { server ->
             server.enqueue(

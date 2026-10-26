@@ -55,6 +55,8 @@ sealed interface CallUi {
     val info: CallInfo
 
     data class Incoming(override val info: CallInfo) : CallUi
+    /** This phone called the agent: in the room, waiting for the agent to pick up. */
+    data class Outgoing(override val info: CallInfo) : CallUi
     data class Connecting(override val info: CallInfo) : CallUi
     data class Active(
         override val info: CallInfo,
@@ -68,13 +70,18 @@ sealed interface CallUi {
 }
 
 /**
- * The one incoming call: ringing, answering, the voice session and hanging up.
+ * The one call: ringing, answering, calling the agent, the voice session and hanging up.
  * Invites arrive by FCM (app in background) or WebSocket (app open); both are
  * de-duplicated by call id. All state changes happen on the main thread.
  *
  * Group calls: while the agent's call is active and this phone is not on it (its
  * ring ended, it declined or hung up, or it never rang), [joinOffer] holds the
  * call and an ongoing "Join" notification is shown; [join] gets this phone in.
+ *
+ * Calls to the agent (M4, [callAgent]): the relay creates the call and returns
+ * this phone's join info at once, so the phone joins the room while the call
+ * rings ([CallUi.Outgoing]) and goes [CallUi.Active] when the agent accepts
+ * (`call.accept` on the WebSocket, the agent showing up in the room, or a poll).
  */
 class CallManager(private val context: Context) : TelecomBridge.Listener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -92,6 +99,8 @@ class CallManager(private val context: Context) : TelecomBridge.Listener {
     private var timeoutJob: Job? = null
     /** Collectors that live as long as the current call. */
     private val callJobs = mutableListOf<Job>()
+    /** Outgoing call: this phone is in the LiveKit room. */
+    private var inRoom = false
 
     private val _joinable = MutableStateFlow<JoinOffer?>(null)
 
@@ -281,10 +290,115 @@ class CallManager(private val context: Context) : TelecomBridge.Listener {
             return
         }
         Log.i(TAG, "in the room after ${SystemClock.elapsedRealtime() - t0} ms")
-        if (isCurrent(info.callId) && _state.value is CallUi.Connecting) {
-            _state.value = CallUi.Active(info, since = SystemClock.elapsedRealtime(), speaker = speakerOn())
-            CallService.refresh()
+        if (!isCurrent(info.callId)) return
+        inRoom = true
+        when (_state.value) {
+            is CallUi.Connecting -> goActive(info)
+            // Calling the agent: stay "Calling…" until it picks up, unless it already did.
+            is CallUi.Outgoing -> if (s.agentInRoom.value) onAgentAnswered(info.callId)
+            else -> Unit
         }
+    }
+
+    private fun goActive(info: CallInfo) {
+        _state.value = CallUi.Active(info, since = SystemClock.elapsedRealtime(), speaker = speakerOn())
+        CallService.refresh()
+    }
+
+    // ---------------------------------------------------------------- outgoing (M4)
+
+    /**
+     * Calls the agent. Must be called with the app in the foreground (it starts the
+     * microphone foreground service). Returns null once the call is ringing (open
+     * [CallActivity]), or a message to show when it could not be placed.
+     */
+    suspend fun callAgent(): Int? {
+        val cur = _state.value
+        if (cur != null && cur !is CallUi.Ended) return if (cur is CallUi.Outgoing || cur is CallUi.Active) null else R.string.call_agent_busy
+        val created = try {
+            withContext(Dispatchers.IO) { Graph.api()!!.createCall() }
+        } catch (e: RelayException) {
+            Log.w(TAG, "create call failed: ${e.status} ${e.code}")
+            return when (e.code) {
+                "agent_offline" -> R.string.call_agent_offline
+                "busy" -> R.string.call_agent_busy
+                "calls_unavailable" -> R.string.call_agent_unavailable
+                else -> R.string.call_failed
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "create call failed", e)
+            return R.string.call_failed
+        }
+        val call = created.call
+        val info = CallInfo.of(call)
+        synchronized(seen) { seen.add(call.callId) }
+        _state.value.let {
+            if (it != null && it !is CallUi.Ended) {
+                // An agent call came in meanwhile: give up ours.
+                withContext(Dispatchers.IO) { runCatching { Graph.api()?.endCall(call.callId) } }
+                return R.string.call_agent_busy
+            }
+        }
+        _joinable.value = null
+        inRoom = false
+        _state.value = CallUi.Outgoing(info)
+        CallService.promoteToActive(context)
+        Log.i(TAG, "calling the agent: ${call.callId}")
+        scope.launch {
+            val stillCalling = { isCurrent(info.callId) && _state.value !is CallUi.Ended }
+            val added = Graph.settings.useTelecom && telecom.addOutgoing(info.agentName, info.callId, this@CallManager)
+            if (!stillCalling()) {
+                if (added) telecom.disconnect(DisconnectCause.LOCAL) // hung up while Telecom was adding the call
+                return@launch
+            }
+            telecomActive = added
+            // The agent may have answered while Telecom was adding the call.
+            if (added && _state.value !is CallUi.Outgoing) telecom.activate()
+            Log.i(TAG, "telecom: $telecomActive")
+            connect(info, created.join)
+        }
+        callJobs += scope.launch { pollOutgoing(info) }
+        return null
+    }
+
+    /**
+     * Backup for the WebSocket while calling: the relay doesn't push events of
+     * calls to the agent, and the socket may be down (screen off, network change).
+     */
+    private suspend fun pollOutgoing(info: CallInfo) {
+        val deadline = SystemClock.elapsedRealtime() + OUTGOING_GIVE_UP_MS
+        while (isCurrent(info.callId) && _state.value is CallUi.Outgoing) {
+            delay(OUTGOING_POLL_MS)
+            if (SystemClock.elapsedRealtime() > deadline) {
+                // The relay's ring timer should have ended it long ago; don't ring forever.
+                withContext(Dispatchers.IO) { runCatching { Graph.api()?.endCall(info.callId) } }
+                finish(info, R.string.call_agent_no_answer, DisconnectCause.MISSED)
+                return
+            }
+            val call = withContext(Dispatchers.IO) { runCatching { Graph.api()?.getCall(info.callId) }.getOrNull() } ?: continue
+            onOutgoingState(info.callId, call.state)
+        }
+    }
+
+    /** The relay's state of the call we placed. */
+    private fun onOutgoingState(callId: String, state: String) {
+        val cur = _state.value
+        if (cur?.info?.callId != callId || cur is CallUi.Ended) return
+        when (state) {
+            "active" -> onAgentAnswered(callId)
+            "declined" -> finish(cur.info, R.string.call_agent_declined, DisconnectCause.REJECTED)
+            "missed" -> finish(cur.info, R.string.call_agent_no_answer, DisconnectCause.MISSED)
+            "canceled", "ended" -> finish(cur.info, R.string.call_ended, DisconnectCause.REMOTE)
+        }
+    }
+
+    private fun onAgentAnswered(callId: String) {
+        val cur = _state.value as? CallUi.Outgoing ?: return
+        if (cur.info.callId != callId) return
+        Log.i(TAG, "the agent answered $callId")
+        if (telecomActive) telecom.activate()
+        // Not in the room yet: connect() finishes the switch to Active.
+        if (inRoom) goActive(cur.info) else _state.value = CallUi.Connecting(cur.info)
     }
 
     fun decline() {
@@ -300,7 +414,8 @@ class CallManager(private val context: Context) : TelecomBridge.Listener {
         val cur = _state.value ?: return
         when (cur) {
             is CallUi.Incoming -> decline()
-            is CallUi.Connecting, is CallUi.Active -> {
+            // While calling the agent this cancels the call (relay: `canceled`).
+            is CallUi.Outgoing, is CallUi.Connecting, is CallUi.Active -> {
                 // Leaving a group call: the others may still be on it, so this phone can rejoin.
                 scope.launch {
                     withContext(Dispatchers.IO) { runCatching { Graph.api()?.endCall(cur.info.callId) }.getOrNull() }?.let(::offerJoin)
@@ -357,6 +472,16 @@ class CallManager(private val context: Context) : TelecomBridge.Listener {
             }
             val cur = _state.value ?: return@launch
             val info = cur.info
+            if (cur is CallUi.Outgoing) {
+                if (event is Event.CallAnswer && event.callId == info.callId) {
+                    onOutgoingState(info.callId, if (event.type == "call.accept") "active" else "declined")
+                } else if (event is Event.CallMissed && event.callId == info.callId) {
+                    onOutgoingState(info.callId, "missed")
+                } else if (event is Event.CallEnd && event.callId == info.callId) {
+                    onOutgoingState(info.callId, "ended")
+                }
+                return@launch
+            }
             when (event) {
                 // Group calls: another phone answering or declining doesn't stop ours
                 // ringing; we can still join until the call stops ringing.
@@ -382,15 +507,19 @@ class CallManager(private val context: Context) : TelecomBridge.Listener {
                     VoiceSession.Signal.Reconnected -> if (cur != null) _state.value = cur.copy(reconnecting = false)
                     is VoiceSession.Signal.Gone -> if (isCurrent(info.callId) && _state.value !is CallUi.Ended) {
                         Log.i(TAG, "voice session gone: ${sig.reason}")
+                        val calling = _state.value is CallUi.Outgoing
                         scope.launch {
                             // Lost the connection while others are still talking: offer to rejoin.
                             withContext(Dispatchers.IO) { runCatching { Graph.api()?.endCall(info.callId) }.getOrNull() }?.let(::offerJoin)
                         }
-                        finish(info, R.string.call_ended_by_agent, DisconnectCause.REMOTE)
+                        finish(info, if (calling) R.string.call_failed else R.string.call_ended_by_agent, DisconnectCause.REMOTE)
                     }
                     null -> Unit
                 }
             }
+        }
+        callJobs += scope.launch {
+            s.agentInRoom.collect { here -> if (here && inRoom) onAgentAnswered(info.callId) }
         }
         callJobs += scope.launch {
             telecom.endpoint.collect { ep ->
@@ -445,7 +574,7 @@ class CallManager(private val context: Context) : TelecomBridge.Listener {
             telecomActive = false
             when (_state.value) {
                 is CallUi.Incoming -> decline()
-                is CallUi.Connecting, is CallUi.Active -> hangUp()
+                is CallUi.Outgoing, is CallUi.Connecting, is CallUi.Active -> hangUp()
                 else -> Unit
             }
         }
@@ -464,6 +593,7 @@ class CallManager(private val context: Context) : TelecomBridge.Listener {
         callJobs.clear()
         session?.close()
         session = null
+        inRoom = false
         if (telecomActive) telecom.disconnect(cause)
         telecomActive = false
         CallService.stop()
@@ -481,5 +611,8 @@ class CallManager(private val context: Context) : TelecomBridge.Listener {
         private const val CLOCK_SKEW_MS = 5_000L
         private const val RING_WINDOW_MS = 30_000L
         const val ENDED_LINGER_MS = 2_000L
+        private const val OUTGOING_POLL_MS = 2_000L
+        /** Well past the relay's ring timeout (30 s by default). */
+        private const val OUTGOING_GIVE_UP_MS = 75_000L
     }
 }

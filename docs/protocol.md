@@ -208,6 +208,24 @@ relay: event call.invite(direction=user_to_agent) → WS
 daemon: POST /v1/calls/{id}/accept → join → starts worker
 ```
 
+App side ("Call agent" button, enabled while the relay WebSocket is connected
+and the agent is online):
+
+- The phone joins the LiveKit room right away with the `join` from the 201 and
+  shows "Calling <agent>…". It switches to the in-call screen on the first of:
+  `call.accept` on the WebSocket, the `agent` participant joining the room, or
+  `GET /v1/calls/{id}` returning `active` (polled every 2 s, because events of
+  calls to the agent are not pushed by FCM and the socket may be down).
+- Hanging up while it rings → `POST /v1/calls/{id}/end` (relay: `canceled`).
+- `call.decline` / state `declined` → "The agent declined the call";
+  `call.missed` / state `missed` → "The agent didn't answer"; the call screen
+  shows the message briefly and closes. As a last resort the app gives up
+  after 75 s (ends the call itself).
+- `503 agent_offline`, `503 calls_unavailable` and `409 busy` are shown under
+  the button; no call screen opens.
+- The phone ignores the `call.invite` of its own call (`direction:
+  user_to_agent` never rings a phone).
+
 ### Call states
 
 ```

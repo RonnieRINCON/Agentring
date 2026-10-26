@@ -12,7 +12,7 @@ locked. No phone network, no numbers, no Twilio. Self-hosted, open source.
 | M1 | Relay, pairing, messages, push | ✅ |
 | M2 | The phone rings (locked, Doze) with native call UI | next |
 | M3 | Voice conversation (Gemini Live / OpenAI Realtime) + `consult_agent` | |
-| M4 | Call your agent from the app; missed/declined fallbacks | |
+| M4 | Call your agent from the app; missed/declined fallbacks | In progress (app side) |
 | M5 | MCP server, skill, examples, 15-minute quickstart | |
 
 ## How it works
