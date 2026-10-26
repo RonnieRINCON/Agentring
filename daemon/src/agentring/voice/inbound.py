@@ -1,0 +1,33 @@
+"""Answering calls the user makes to the agent (M4, "Call agent" in the app)."""
+
+from __future__ import annotations
+
+import logging
+import time
+from typing import Any
+
+from ..relay_client import RelayError
+from .session import CallInfo
+
+log = logging.getLogger("agentring.voice")
+
+
+def is_incoming_call(event: dict[str, Any], now: float | None = None) -> bool:
+    """A `call.invite` from a phone to the agent that still rings (replayed old invites don't count)."""
+    if event.get("type") != "call.invite" or event.get("direction") != "user_to_agent":
+        return False
+    return (event.get("expires_at") or 0) / 1000 > (time.time() if now is None else now)
+
+
+def accept_incoming(client: Any, event: dict[str, Any]) -> tuple[CallInfo, dict[str, Any]] | None:
+    """Accepts an incoming call. Returns what VoiceAgent.run needs, or None if it isn't
+    one (or someone else took it first). `client` is a RelayClient."""
+    if not is_incoming_call(event):
+        return None
+    try:
+        res = client.accept_call(event["call_id"])
+    except RelayError as e:
+        log.warning("could not accept call %s: %s", event["call_id"], e)
+        return None
+    call = res.get("call") or {}
+    return CallInfo(event["call_id"], event.get("reason") or call.get("reason") or "", "user_to_agent"), res["join"]
