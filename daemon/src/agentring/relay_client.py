@@ -81,10 +81,20 @@ class RelayClient:
         self._request("POST", f"/v1/messages/{msg_id}/read")
 
     # calls
-    def create_call(self, reason: str, *, priority: str = "normal", agent_name: str | None = None) -> dict:
+    def create_call(
+        self,
+        reason: str,
+        *,
+        priority: str = "normal",
+        agent_name: str | None = None,
+        device_ids: list[str] | None = None,
+    ) -> dict:
+        """Ring every paired phone, or only `device_ids` (a targeted call)."""
         body: dict[str, Any] = {"reason": reason, "priority": priority}
         if agent_name:
             body["agent_name"] = agent_name
+        if device_ids is not None:
+            body["device_ids"] = list(device_ids)
         return self._request("POST", "/v1/calls", json=body)
 
     def get_call(self, call_id: str) -> dict:

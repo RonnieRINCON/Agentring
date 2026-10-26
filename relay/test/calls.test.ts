@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import WebSocket from "ws";
 import { AGENT, pairDevice, setup } from "./helpers.js";
 
 let cleanup: Array<() => Promise<unknown>> = [];
@@ -328,5 +329,111 @@ describe("calls", () => {
     const r = await hook("ok", { event: "participant_left", room: { name: call.call_id }, participant: { identity: `device_${dev.device_id}` } });
     expect(r.statusCode).toBe(200);
     expect(b.ctx.calls!.get(call.call_id)).toMatchObject({ state: "ended", ended_by: "relay", end_reason: "room_closed" });
+  });
+
+  describe("targeted calls (device_ids)", () => {
+    const pushedTo = (b: Awaited<ReturnType<typeof app>>, type: string) =>
+      b.push.sent.filter((x) => JSON.parse(x.payload.event!).type === type).map((x) => x.target.deviceId);
+
+    it("rings only the targeted phones; the others never see or touch the call", async () => {
+      const b = await app();
+      const a = await pairDevice(b, "A", "fcm-tok-a");
+      const other = await pairDevice(b, "B", "fcm-tok-b");
+
+      const r = await placeCall(b, { reason: "Done", device_ids: [a.device_id, a.device_id] });
+      expect(r.statusCode).toBe(201);
+      const { call } = r.json();
+      expect(call.device_ids).toEqual([a.device_id]);
+      await flush();
+
+      // only A gets the invite, and the event names its targets
+      expect(pushedTo(b, "call.invite")).toEqual([a.device_id]);
+      expect(eventsOf(b).find((e) => e.type === "call.invite")).toMatchObject({ device_ids: [a.device_id] });
+
+      const post = (h: { authorization: string }, action: string) =>
+        b.app.inject({ method: "POST", url: `/v1/calls/${call.call_id}/${action}`, headers: h });
+      // B can't answer, decline or join, and doesn't see the call anywhere
+      for (const action of ["accept", "decline", "join"]) {
+        const res = await post(other.headers, action);
+        expect(res.statusCode).toBe(403);
+        expect(res.json().error.code).toBe("forbidden");
+      }
+      expect((await post(other.headers, "ringing")).statusCode).toBe(204);
+      expect(eventsOf(b).filter((e) => e.type === "call.ringing")).toHaveLength(0);
+      expect((await b.app.inject({ url: `/v1/calls/${call.call_id}`, headers: other.headers })).statusCode).toBe(404);
+      expect((await b.app.inject({ url: "/v1/calls", headers: other.headers })).json().calls).toEqual([]);
+      expect((await b.app.inject({ url: "/v1/status", headers: other.headers })).json().active_call).toBeNull();
+      const evB = (await b.app.inject({ url: "/v1/events", headers: other.headers })).json();
+      expect(evB.events.filter((e: { type: string }) => e.type.startsWith("call."))).toEqual([]);
+      expect(evB.next_after_seq).toBe(evB.last_seq);
+
+      // A and the agent see it
+      expect((await b.app.inject({ url: "/v1/status", headers: a.headers })).json().active_call.call_id).toBe(call.call_id);
+      expect((await b.app.inject({ url: "/v1/calls", headers: a.headers })).json().calls).toHaveLength(1);
+      expect((await b.app.inject({ url: `/v1/calls/${call.call_id}`, headers: AGENT })).json().device_ids).toEqual([a.device_id]);
+
+      // A answers: B gets no "join" push; the agent hangs up: only A is told
+      expect((await post(a.headers, "accept")).json().call.state).toBe("active");
+      expect((await post(other.headers, "join")).statusCode).toBe(403);
+      expect((await b.app.inject({ method: "POST", url: `/v1/calls/${call.call_id}/end`, headers: AGENT })).json().state).toBe("ended");
+      await flush();
+      expect(pushedTo(b, "call.accept")).toEqual([]);
+      expect(pushedTo(b, "call.end")).toEqual([a.device_id]);
+      expect(b.push.sent.every((x) => x.target.deviceId === a.device_id)).toBe(true);
+    });
+
+    it("a targeted call is declined when its only phone declines", async () => {
+      const b = await app();
+      const a = await pairDevice(b, "A", "fcm-tok-a");
+      await pairDevice(b, "B", "fcm-tok-b");
+      const { call } = (await placeCall(b, { reason: "Done", device_ids: [a.device_id] })).json();
+      const res = await b.app.inject({ method: "POST", url: `/v1/calls/${call.call_id}/decline`, headers: a.headers });
+      expect(res.json().state).toBe("declined");
+    });
+
+    it("rejects empty, unknown and revoked ids, and device callers", async () => {
+      const b = await app();
+      const a = await pairDevice(b, "A", "fcm-tok-a");
+      const gone = await pairDevice(b, "B", "fcm-tok-b");
+      await b.app.inject({ method: "DELETE", url: `/v1/devices/${gone.device_id}`, headers: AGENT });
+      const unknown = "dev_" + "0".repeat(26);
+      for (const device_ids of [[], [unknown], [a.device_id, gone.device_id], ["not-an-id"]]) {
+        const r = await placeCall(b, { reason: "Done", device_ids });
+        expect(r.statusCode, JSON.stringify(device_ids)).toBe(400);
+        expect(r.json().error.code).toBe("invalid_request");
+      }
+      b.ctx.hub.isAgentOnline = () => true;
+      const fromPhone = await b.app.inject({ method: "POST", url: "/v1/calls", headers: a.headers, payload: { device_ids: [a.device_id] } });
+      expect(fromPhone.statusCode).toBe(400);
+      expect(eventsOf(b).filter((e) => e.type === "call.invite")).toHaveLength(0);
+    });
+
+    it("the WebSocket of a non-targeted phone gets none of the call's events, live or on replay", async () => {
+      const b = await app();
+      await b.app.listen({ port: 0, host: "127.0.0.1" });
+      const base = `ws://127.0.0.1:${(b.app.server.address() as { port: number }).port}/v1/ws`;
+      const a = await pairDevice(b, "A", "fcm-tok-a");
+      const other = await pairDevice(b, "B", "fcm-tok-b");
+      const open = (h: Record<string, string>) => {
+        const ws = new WebSocket(base, { headers: h });
+        const frames: Array<{ type: string; call_id?: string }> = [];
+        ws.on("message", (m) => frames.push(JSON.parse(m.toString())));
+        cleanup.push(async () => ws.close());
+        return new Promise<typeof frames>((r) => ws.on("open", () => r(frames)));
+      };
+      const [fa, fb] = [await open(a.headers), await open(other.headers)];
+      const { call } = (await placeCall(b, { reason: "Done", device_ids: [a.device_id] })).json();
+      await b.app.inject({ method: "POST", url: "/v1/messages", headers: AGENT, payload: { text: "after" } });
+      const until = async (pred: () => boolean) => {
+        for (let i = 0; i < 100 && !pred(); i++) await new Promise((r) => setTimeout(r, 20));
+      };
+      await until(() => fb.some((f) => f.type === "msg.new") && fa.some((f) => f.type === "msg.new"));
+      expect(fa.some((f) => f.type === "call.invite" && f.call_id === call.call_id)).toBe(true);
+      expect(fb.filter((f) => f.type.startsWith("call."))).toEqual([]);
+
+      const replay = await open(other.headers);
+      await until(() => replay.some((f) => f.type === "agent.presence"));
+      expect(replay.map((f) => f.type)).toEqual(["ws.hello", "msg.new", "agent.presence"]);
+    });
   });
 });

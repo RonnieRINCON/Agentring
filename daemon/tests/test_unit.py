@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
+
+import httpx
 import pytest
 import typer
 
 from agentring.cli import parse_since
+from agentring.relay_client import RelayClient
 from agentring.store import Store
 from agentring.sync import apply_event
 
@@ -52,3 +56,19 @@ def test_undelivered_replies():
     s.mark_delivered(["msg_1"], NOW)
     assert [r["text"] for r in s.replies(undelivered_only=True)] == ["c"]
     assert [r["text"] for r in s.replies(since=NOW + 1)] == ["c"]
+
+
+def test_create_call_sends_device_ids_only_when_given():
+    bodies: list[dict] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(req.content))
+        return httpx.Response(201, json={"call": {}, "join": {}})
+
+    with RelayClient("http://relay.test", "ak_x", transport=httpx.MockTransport(handler)) as c:
+        c.create_call("all")
+        c.create_call("one", device_ids=["dev_A"])
+    assert bodies == [
+        {"reason": "all", "priority": "normal"},
+        {"reason": "one", "priority": "normal", "device_ids": ["dev_A"]},
+    ]

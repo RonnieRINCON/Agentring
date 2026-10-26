@@ -3,7 +3,7 @@ import type { Principal } from "../auth.js";
 import { type Ctx, principal, requireAuth } from "../context.js";
 import { ApiError, forbidden, notFound } from "../errors.js";
 import { newId } from "../ids.js";
-import type { Schemas } from "../protocol.js";
+import type { Event, Schemas } from "../protocol.js";
 
 type Call = Schemas["Call"];
 type CallState = Schemas["CallState"];
@@ -23,6 +23,20 @@ interface CallRow {
   ended_by: Schemas["Actor"] | null;
   end_reason: Schemas["EndReason"] | null;
   device_id: string | null;
+  /** JSON array of the targeted device ids; NULL = every paired phone rings. */
+  device_ids: string | null;
+}
+
+/** The phones a targeted call rings, or undefined when it rings every paired phone. */
+export function targetsOf(r: Pick<CallRow, "device_ids">): string[] | undefined {
+  return r.device_ids ? (JSON.parse(r.device_ids) as string[]) : undefined;
+}
+
+/** Whether `p` may see this call at all: a targeted call is private to its phones. */
+export function canSee(r: Pick<CallRow, "device_ids">, p: Principal): boolean {
+  if (p.kind === "agent") return true;
+  const targets = targetsOf(r);
+  return targets === undefined || targets.includes(p.deviceId);
 }
 
 export function callFromRow(r: CallRow): Call {
@@ -40,6 +54,7 @@ export function callFromRow(r: CallRow): Call {
     ...(r.end_reason ? { end_reason: r.end_reason } : {}),
     ...(r.answered_at && r.ended_at ? { duration_ms: r.ended_at - r.answered_at } : {}),
     ...(r.device_id ? { device_id: r.device_id } : {}),
+    ...(r.device_ids ? { device_ids: targetsOf(r) } : {}),
   };
 }
 
@@ -48,6 +63,7 @@ const identityOf = (p: Principal) => (p.kind === "agent" ? "agent" : `device_${p
 /** Which side placed the call. */
 const callerKind = (d: Direction) => (d === "agent_to_user" ? "agent" : "device");
 const invalidState = (state: CallState) => new ApiError(409, "invalid_state", `Call is ${state}`);
+const notForThisDevice = () => forbidden("This call is for other devices");
 
 /**
  * Call state machine, ring timer and LiveKit room lifecycle.
@@ -61,6 +77,10 @@ const invalidState = (state: CallState) => new ApiError(409, "invalid_state", `C
  * declining or after hanging up. A phone hanging up only leaves; the call ends
  * when the agent hangs up or the last phone leaves. The call is `declined` only
  * when every ringing phone declined.
+ *
+ * Targeted calls (`device_ids`, agent only): only those phones ring, and the call
+ * is private to them. Other phones get none of its events, don't see it in the
+ * REST API and can't answer or join it (`canSee`).
  */
 type PartState = "ringing" | "joined" | "declined" | "missed" | "left";
 /** LiveKit reports join times in its own clock (second precision on older servers). */
@@ -119,12 +139,23 @@ export class Calls {
     this.timers.clear();
   }
 
+  /** Whether a device may see this event; events of a targeted call only reach its phones. */
+  eventVisibleTo(event: Event, p: Principal): boolean {
+    if (p.kind === "agent" || !event.type.startsWith("call.")) return true;
+    const c = this.get((event as { call_id: string }).call_id);
+    return !c || canSee(c, p);
+  }
+
   create(p: Principal, body: Schemas["CreateCallRequest"]): CallRow {
     const direction: Direction = p.kind === "agent" ? "agent_to_user" : "user_to_agent";
+    let targets: string[] | undefined;
     if (direction === "agent_to_user") {
       if (!body.reason) throw new ApiError(400, "invalid_request", "reason is required");
+      if (body.device_ids !== undefined) targets = this.validTargets(body.device_ids);
       const n = this.ctx.db.prepare("SELECT COUNT(*) AS n FROM devices WHERE revoked_at IS NULL").get() as { n: number };
       if (n.n === 0) throw new ApiError(409, "no_devices", "No paired devices");
+    } else if (body.device_ids !== undefined) {
+      throw new ApiError(400, "invalid_request", "device_ids is only for calls placed by the agent");
     } else if (!this.ctx.hub.isAgentOnline()) {
       throw new ApiError(503, "agent_offline", "The agent is not connected");
     }
@@ -145,16 +176,21 @@ export class Calls {
       ended_by: null,
       end_reason: null,
       device_id: p.kind === "device" ? p.deviceId : null,
+      device_ids: targets ? JSON.stringify(targets) : null,
     };
     this.ctx.db
       .prepare(
-        `INSERT INTO calls (call_id, direction, state, reason, priority, agent_name, created_at, expires_at, device_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO calls (call_id, direction, state, reason, priority, agent_name, created_at, expires_at, device_id, device_ids)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(row.call_id, direction, "ringing", row.reason, row.priority, row.agent_name, now, row.expires_at, row.device_id);
+      .run(row.call_id, direction, "ringing", row.reason, row.priority, row.agent_name, now, row.expires_at, row.device_id, row.device_ids);
     if (direction === "agent_to_user") {
-      const devs = this.ctx.db.prepare("SELECT device_id FROM devices WHERE revoked_at IS NULL").all() as Array<{ device_id: string }>;
-      for (const d of devs) this.setPart(row.call_id, d.device_id, "ringing");
+      const devs =
+        targets ??
+        (this.ctx.db.prepare("SELECT device_id FROM devices WHERE revoked_at IS NULL").all() as Array<{ device_id: string }>).map(
+          (d) => d.device_id,
+        );
+      for (const d of devs) this.setPart(row.call_id, d, "ringing");
     } else if (p.kind === "device") {
       this.setPart(row.call_id, p.deviceId, "joined");
     }
@@ -166,16 +202,33 @@ export class Calls {
       reason: row.reason,
       priority: row.priority,
       expires_at: row.expires_at,
+      ...(targets ? { device_ids: targets } : {}),
     });
     this.armTimer(row);
     return row;
+  }
+
+  /** Targeted call: every id must be a paired, non-revoked phone. Duplicates are dropped. */
+  private validTargets(ids: string[]): string[] {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) throw new ApiError(400, "invalid_request", "device_ids must not be empty");
+    const active = new Set(
+      (
+        this.ctx.db
+          .prepare(`SELECT device_id FROM devices WHERE revoked_at IS NULL AND device_id IN (${unique.map(() => "?").join(",")})`)
+          .all(...unique) as Array<{ device_id: string }>
+      ).map((d) => d.device_id),
+    );
+    const bad = unique.filter((id) => !active.has(id));
+    if (bad.length > 0) throw new ApiError(400, "invalid_request", `Unknown or revoked device_ids: ${bad.join(", ")}`);
+    return unique;
   }
 
   ringing(callId: string, deviceId: string): void {
     const c = this.get(callId);
     if (!c) throw notFound("Call");
     const stillRinging = c.state === "ringing" || (c.state === "active" && Date.now() <= c.expires_at);
-    if (!stillRinging || c.direction !== "agent_to_user") return;
+    if (!stillRinging || c.direction !== "agent_to_user" || !canSee(c, { kind: "device", deviceId })) return;
     let set = this.ringingDevices.get(callId);
     if (!set) this.ringingDevices.set(callId, (set = new Set()));
     if (set.has(deviceId)) return;
@@ -216,6 +269,7 @@ export class Calls {
     const c = this.get(callId);
     if (!c) throw notFound("Call");
     if (c.direction !== "agent_to_user") throw forbidden("Only calls from the agent can be joined");
+    if (!canSee(c, { kind: "device", deviceId })) throw notForThisDevice();
     if (c.state !== "ringing" && c.state !== "active") throw new ApiError(409, "call_ended", `Call is ${c.state}`);
     if (c.state === "active" && this.part(callId, deviceId) === "joined") return this.rejoin(c, deviceId);
     return this.joinDevice(c, deviceId);
@@ -352,6 +406,7 @@ export class Calls {
     const c = this.get(callId);
     if (!c) throw notFound("Call");
     if (p.kind === callerKind(c.direction)) throw forbidden("The caller cannot answer its own call");
+    if (!canSee(c, p)) throw notForThisDevice();
     return c;
   }
 
@@ -429,6 +484,12 @@ export function callRoutes(app: FastifyInstance, ctx: Ctx, calls: Calls): void {
             reason: { type: "string", maxLength: 500 },
             priority: { type: "string", enum: ["normal", "urgent"] },
             agent_name: { type: "string", minLength: 1, maxLength: 64 },
+            device_ids: {
+              type: "array",
+              minItems: 1,
+              maxItems: 50,
+              items: { type: "string", pattern: "^dev_[0-9A-HJKMNP-TV-Z]{26}$" },
+            },
           },
         },
       },
@@ -463,18 +524,23 @@ export function callRoutes(app: FastifyInstance, ctx: Ctx, calls: Calls): void {
     },
     async (req) => {
       const { limit = 100, before } = req.query;
-      const rows = (
-        before
-          ? ctx.db.prepare("SELECT * FROM calls WHERE call_id < ? ORDER BY call_id DESC LIMIT ?").all(before, limit)
-          : ctx.db.prepare("SELECT * FROM calls ORDER BY call_id DESC LIMIT ?").all(limit)
-      ) as unknown as CallRow[];
+      const p = principal(req);
+      // Devices don't see targeted calls that are not for them.
+      const where = [
+        ...(before ? ["call_id < ?"] : []),
+        ...(p.kind === "device" ? ["(device_ids IS NULL OR EXISTS (SELECT 1 FROM json_each(calls.device_ids) WHERE value = ?))"] : []),
+      ];
+      const args = [...(before ? [before] : []), ...(p.kind === "device" ? [p.deviceId] : []), limit];
+      const rows = ctx.db
+        .prepare(`SELECT * FROM calls ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY call_id DESC LIMIT ?`)
+        .all(...args) as unknown as CallRow[];
       return { calls: rows.map(callFromRow) };
     },
   );
 
   app.get<{ Params: { call_id: string } }>("/v1/calls/:call_id", { preHandler: auth, schema: { params: CALL_ID } }, async (req) => {
     const c = calls.get(req.params.call_id);
-    if (!c) throw notFound("Call");
+    if (!c || !canSee(c, principal(req))) throw notFound("Call");
     return callFromRow(c);
   });
 

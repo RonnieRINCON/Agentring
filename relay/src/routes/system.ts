@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { type Ctx, principal, requireAuth } from "../context.js";
 import type { Schemas } from "../protocol.js";
-import { callFromRow } from "./calls.js";
+import { callFromRow, canSee } from "./calls.js";
 
 export const VERSION = "0.1.0";
 
@@ -19,7 +19,7 @@ export function systemRoutes(app: FastifyInstance, ctx: Ctx): void {
       push_provider: ctx.pushProviderName,
       active_call: (() => {
         const open = ctx.calls?.open();
-        return open ? callFromRow(open) : null;
+        return open && canSee(open, principal(req)) ? callFromRow(open) : null;
       })(),
     };
     if (principal(req).kind === "agent") {
@@ -44,8 +44,8 @@ export function systemRoutes(app: FastifyInstance, ctx: Ctx): void {
       },
     },
     async (req) => {
-      const page = ctx.events.list(req.query.after_seq ?? 0, req.query.limit ?? 100);
-      return { events: page.events, last_seq: page.lastSeq, has_more: page.hasMore };
+      const page = ctx.events.list(req.query.after_seq ?? 0, req.query.limit ?? 100, principal(req));
+      return { events: page.events, last_seq: page.lastSeq, has_more: page.hasMore, next_after_seq: page.nextAfterSeq };
     },
   );
 }

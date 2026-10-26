@@ -63,7 +63,7 @@ n8n), `docs/troubleshooting-oem.md`, daemon Dockerfile/compose profile.
 ## Build and test
 
 ```bash
-cd relay  && npm ci && npm run typecheck && npm test && npm run build   # 31 tests, Node >= 22.13
+cd relay  && npm ci && npm run typecheck && npm test && npm run build   # 35 tests, Node >= 22.13
 cd daemon && uv run pytest -q          # needs relay/dist (e2e against the real relay)
 cd app-android && ./gradlew :core:test :app:assembleDebug
 cd app-android && ./gradlew -PcoreOnly :core:test   # when Google's Maven is unreachable
@@ -94,7 +94,9 @@ Local real-phone test: `scripts/device-test.sh [apk]` or `--instrumented`.
   a time (`409 busy`); group calls: every phone rings, any may answer while it
   rings, and any paired phone not on an active call may join it later
   (`POST /v1/calls/{id}/join`; `call.accept` is pushed at normal priority so the
-  other phones can show "Join").
+  other phones can show "Join"). Targeted calls: the agent may pass `device_ids`
+  to ring only those phones; the call is then private to them (the relay filters
+  its events, pushes and REST views for every other phone).
 - Auth: daemon uses an `ak_…` API key (generated on first relay start, stored in
   `DATA_DIR/api_key`); devices use a long-lived HS256 `device_jwt` checked
   against the DB on every request (immediate revocation, WS closed with 4401).

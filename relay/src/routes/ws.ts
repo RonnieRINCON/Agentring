@@ -89,10 +89,10 @@ export function wsRoutes(app: FastifyInstance, ctx: Ctx): void {
       );
       let after = req.query.after_seq ?? 0;
       for (;;) {
-        const page = events.list(after, REPLAY_PAGE);
+        const page = events.list(after, REPLAY_PAGE, p);
         page.events.forEach(send);
         if (!page.hasMore) break;
-        after = page.events.at(-1)!.seq!;
+        after = page.nextAfterSeq;
       }
       const unsubscribe = events.subscribe({ principal: p, send });
 
