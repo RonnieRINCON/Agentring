@@ -11,6 +11,8 @@ export interface Subscriber {
 }
 
 type Listener = (event: Event) => void;
+/** Decides whether a principal may see an event (e.g. a targeted call's events). */
+export type Visibility = (event: Event, principal: Principal) => boolean;
 
 /**
  * Append-only event log with a global `seq`, plus live fan-out to WebSocket
@@ -20,6 +22,7 @@ type Listener = (event: Event) => void;
 export class EventLog {
   private readonly subscribers = new Set<Subscriber>();
   private readonly listeners = new Set<Listener>();
+  private visible: Visibility = () => true;
 
   constructor(private readonly db: Db) {}
 
@@ -33,7 +36,7 @@ export class EventLog {
       this.db.prepare("UPDATE events SET body = ? WHERE seq = ?").run(JSON.stringify(event), event.seq);
     }
     for (const s of this.subscribers) {
-      if (audience === "all" || (audience === "agent") === (s.principal.kind === "agent")) {
+      if ((audience === "all" || (audience === "agent") === (s.principal.kind === "agent")) && this.visible(event, s.principal)) {
         try {
           s.send(event);
         } catch {
@@ -50,13 +53,28 @@ export class EventLog {
     this.listeners.add(listener);
   }
 
-  list(afterSeq: number, limit: number): { events: Event[]; lastSeq: number; hasMore: boolean } {
+  /** Restricts which events each principal gets, live and on replay. */
+  setVisibility(visible: Visibility): void {
+    this.visible = visible;
+  }
+
+  /**
+   * A page of persisted events after `afterSeq`. With a principal, events it may
+   * not see are left out (the page may then hold fewer than `limit`).
+   */
+  list(
+    afterSeq: number,
+    limit: number,
+    principal?: Principal,
+  ): { events: Event[]; lastSeq: number; hasMore: boolean; nextAfterSeq: number } {
     const rows = this.db
       .prepare("SELECT body FROM events WHERE seq > ? ORDER BY seq LIMIT ?")
       .all(afterSeq, limit + 1) as Array<{ body: string }>;
     const hasMore = rows.length > limit;
-    const events = rows.slice(0, limit).map((r) => JSON.parse(r.body) as Event);
-    return { events, lastSeq: this.lastSeq(), hasMore };
+    const page = rows.slice(0, limit).map((r) => JSON.parse(r.body) as Event);
+    const nextAfterSeq = page.at(-1)?.seq ?? afterSeq;
+    const events = principal ? page.filter((e) => this.visible(e, principal)) : page;
+    return { events, lastSeq: this.lastSeq(), hasMore, nextAfterSeq };
   }
 
   lastSeq(): number {

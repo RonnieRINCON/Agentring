@@ -47,7 +47,7 @@ Every event is a flat JSON object:
 
 | `type` | Payload | Persisted | Emitted when |
 |---|---|---|---|
-| `call.invite` | `call_id, direction, agent_name, reason, priority, expires_at` | ✓ | a call is created; addressed to the callee side |
+| `call.invite` | `call_id, direction, agent_name, reason, priority, expires_at, device_ids?` | ✓ | a call is created; addressed to the callee side (`device_ids` only on a targeted call) |
 | `call.ringing` | `call_id, device_id` | ✓ | a device shows the incoming call UI |
 | `call.accept` | `call_id, by, device_id?` | ✓ | a callee answered (in a group call, once per phone that joins, by `accept` or `join`) |
 | `call.decline` | `call_id, by, device_id?` | ✓ | a callee declined (in a group call, only that phone) |
@@ -93,7 +93,11 @@ that only want to catch up (e.g. `agentring replies` when `serve` isn't
 running).
 
 Visibility: both principals see all persisted events; each side acts on them
-according to `direction`/`from`. Devices additionally get `agent.presence`.
+according to `direction`/`from`. Devices additionally get `agent.presence`. The
+exception is a targeted call (see *Targeted calls*): its `call.*` events reach
+only the agent and the phones it targets, on the WebSocket (live and replay),
+over FCM and in `GET /v1/events`. Because of that a page of `GET /v1/events` can
+hold fewer events than `limit`; page on its `next_after_seq`.
 
 ### Push (FCM)
 
@@ -133,6 +137,8 @@ Which events are pushed to devices:
 | `call.invite` (`agent_to_user`) | until `expires_at` (≤ 30 s) | ring |
 | `call.end` / `call.missed` of an agent call | 30 s | stop ringing / tear down the call screen on all devices |
 | `call.accept` of an agent call (**normal** priority), to every phone except the one that joined | 1 h | offer "join the call" on the phones that are not on it |
+
+A targeted call's pushes go only to the phones it targets.
 | `msg.new` (`from: agent`) | 28 days | notification |
 
 `call.accept` goes at normal priority: a phone still ringing has nothing to show
@@ -263,6 +269,31 @@ another phone, the response of its own `decline` / `end` (state still `active`),
 its own ring timing out locally (it checks `GET /v1/calls/{call_id}`), and
 `active_call` in `GET /v1/status` when the app comes to the foreground. It stops
 offering it on `call.end` / `call.missed` or a `409 call_ended`.
+
+### Targeted calls (agent → some phones)
+
+The agent may ring only some phones, e.g. calling back just the person who asked
+("call me when it's done") instead of waking everyone:
+
+```
+POST /v1/calls {"reason": "The report is ready", "device_ids": ["dev_…"]}
+```
+
+`device_ids` (agent only) lists paired, non-revoked phones (`GET /v1/devices`);
+duplicates are ignored. Unknown or revoked ids, an empty list, or a phone sending
+`device_ids` → `400 invalid_request`. Without it, every paired phone rings (group
+call, above).
+
+A targeted call is private to its phones. Only they get participant rows, the
+`call.invite` (WebSocket and push) and every later event of the call, and only
+they can answer, decline or join it; the group-call rules above apply among them.
+Every other phone gets no event or push for it, so it never rings or offers
+"join", even with an old app: the filtering is done by the relay. For those
+phones the call does not exist: `GET /v1/calls/{call_id}` is `404`, it is left
+out of `GET /v1/calls` and of `active_call` in `GET /v1/status`, and
+`accept` / `decline` / `join` are `403 forbidden` (`ringing` is ignored). It
+still blocks new calls while it rings or is active (`409 busy`, one call at a
+time). The `Call` object and the `call.invite` event carry `device_ids`.
 
 A LiveKit `participant_left` for a phone's older session (e.g. kicked by its
 own rejoin with the same identity) does not take it off the call: the relay

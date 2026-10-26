@@ -12,8 +12,8 @@ const CALL_UPDATE_TTL_S = 30;
 /** "Someone is on the call, you can join": long enough for a phone that was offline; the app re-checks the call. */
 const CALL_JOINABLE_TTL_S = 3600;
 
-/** Just enough of a call for push routing. */
-export type CallLookup = (callId: string) => { direction: string } | undefined;
+/** Just enough of a call for push routing; `device_ids` = the phones a targeted call rings. */
+export type CallLookup = (callId: string) => { direction: string; device_ids?: string[] } | undefined;
 
 export function signEvent(pushSecret: string, eventJson: string): string {
   return createHmac("sha256", Buffer.from(pushSecret, "base64url")).update(eventJson, "utf8").digest("base64url");
@@ -85,7 +85,10 @@ export class PushDispatcher {
     const devices = this.db
       .prepare("SELECT device_id, push_secret, fcm_token FROM devices WHERE revoked_at IS NULL AND fcm_token IS NOT NULL")
       .all() as Array<{ device_id: string; push_secret: string; fcm_token: string }>;
+    // A targeted call's pushes only go to the phones it targets.
+    const targets = event.type.startsWith("call.") ? this.getCall((event as { call_id: string }).call_id)?.device_ids : undefined;
     for (const d of devices) {
+      if (targets && !targets.includes(d.device_id)) continue;
       // The phone that joined already knows.
       if (event.type === "call.accept" && event.device_id === d.device_id) continue;
       const payload = buildPayload(this.relayId, d.push_secret, event);

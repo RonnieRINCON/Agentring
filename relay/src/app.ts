@@ -15,7 +15,7 @@ import type { PushConfig } from "./protocol.js";
 import { PushDispatcher } from "./push/dispatcher.js";
 import { FcmProvider } from "./push/fcm.js";
 import type { PushProvider } from "./push/push-provider.js";
-import { Calls, callRoutes } from "./routes/calls.js";
+import { Calls, callRoutes, targetsOf } from "./routes/calls.js";
 import { messageRoutes } from "./routes/messages.js";
 import { pairingRoutes } from "./routes/pairing.js";
 import { systemRoutes } from "./routes/system.js";
@@ -94,8 +94,12 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Bu
   if (!ctx.livekit) app.log.warn("LiveKit is not configured: calls are disabled");
   const calls = new Calls(ctx);
   ctx.calls = calls;
+  events.setVisibility((e, p) => calls.eventVisibleTo(e, p));
 
-  const dispatcher = new PushDispatcher(db, provider, relayId, app.log, (id) => calls.get(id));
+  const dispatcher = new PushDispatcher(db, provider, relayId, app.log, (id) => {
+    const c = calls.get(id);
+    return c && { direction: c.direction, device_ids: targetsOf(c) };
+  });
   events.onEvent((e) => dispatcher.handle(e));
 
   app.setErrorHandler((err, req, reply) => {

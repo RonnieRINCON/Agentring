@@ -1,0 +1,1 @@
+{"type":"call.invite","id":"evt_01JB0000000000000000000003","ts":1761200000000,"seq":42,"call_id":"call_01JB0000000000000000000004","direction":"agent_to_user","agent_name":"Claude","reason":"The report you asked for is ready","priority":"normal","expires_at":1761200030000,"device_ids":["dev_01JB0000000000000000000005"]}

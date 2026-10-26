@@ -174,6 +174,12 @@ paths:
         The caller receives its LiveKit join info immediately. The callee
         receives a `call.invite` event and gets its join info from
         `POST /v1/calls/{call_id}/accept`.
+
+        Targeted calls: the agent may pass `device_ids` to ring only those phones.
+        The call is then private to them: the other phones get none of its events
+        (WebSocket, push or `GET /v1/events`), do not see it in `GET /v1/calls`,
+        `GET /v1/calls/{call_id}` (404) or `active_call` in `GET /v1/status`, and
+        cannot accept, decline or join it (403).
       security: [{ agentKey: [] }, { deviceJwt: [] }]
       requestBody:
         required: true
@@ -186,7 +192,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CallWithJoin" }
-        "400": { $ref: "#/components/responses/BadRequest" }
+        "400":
+          description: "`invalid_request`, e.g. a missing `reason` (agent caller), an empty `device_ids`, an unknown or revoked device id, or `device_ids` sent by a device."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "409":
           description: "`busy` (another call is ringing/active) or `no_devices` (agent caller, nothing paired)."
@@ -293,7 +303,8 @@ paths:
         still rings it is the same as accepting (the call becomes `active`). Emits
         `call.accept` with this phone's `device_id` (once per phone that joins); a
         phone already on the call just gets a new token (no event). Only agent calls
-        (`agent_to_user`) can be joined.
+        (`agent_to_user`) can be joined, and a targeted call (`device_ids`) only by
+        the phones it targets.
       security: [{ deviceJwt: [] }]
       responses:
         "200":
@@ -303,7 +314,7 @@ paths:
               schema: { $ref: "#/components/schemas/CallWithJoin" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403":
-          description: "`forbidden` (not an agent call)."
+          description: "`forbidden` (not an agent call, or a targeted call this phone is not in)."
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -492,6 +503,13 @@ paths:
                     type: integer
                     minimum: 0
                   has_more: { type: boolean }
+                  next_after_seq:
+                    description: |
+                      Pass as `after_seq` for the next page. It can be past the last
+                      returned event when events this caller may not see (another
+                      phone's targeted call) were left out of the page.
+                    type: integer
+                    minimum: 0
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /v1/ws:
@@ -758,6 +776,17 @@ components:
           description: Display name override for this call (agent only).
           type: string
           maxLength: 64
+        device_ids:
+          description: |
+            Agent only: ring only these paired, non-revoked phones (a targeted
+            call) instead of every paired phone. Only they get the invite, can
+            answer, decline or join, and see the call at all. Duplicates are
+            ignored. Unknown or revoked ids, an empty list, or a device caller
+            sending it → `400 invalid_request`.
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: { $ref: "#/components/schemas/DeviceId" }
     Call:
       type: object
       required: [call_id, direction, state, priority, agent_name, created_at]
@@ -777,6 +806,10 @@ components:
         device_id:
           description: Device that placed or answered the call.
           $ref: "#/components/schemas/DeviceId"
+        device_ids:
+          description: Targeted call only; the phones it rings. Absent = every paired phone.
+          type: array
+          items: { $ref: "#/components/schemas/DeviceId" }
     JoinInfo:
       type: object
       required: [livekit_url, livekit_token, room, identity, expires_at]
@@ -878,6 +911,12 @@ components:
             expires_at:
               description: Do not ring after this instant (= created + ring timeout).
               $ref: "#/components/schemas/Timestamp"
+            device_ids:
+              description: |
+                Targeted call only; the phones it rings. The relay never delivers the
+                events of a targeted call to other phones, so clients need not filter.
+              type: array
+              items: { $ref: "#/components/schemas/DeviceId" }
       example:
         type: call.invite
         id: evt_01JB0000000000000000000001

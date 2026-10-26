@@ -145,6 +145,12 @@ export interface paths {
          * @description The caller receives its LiveKit join info immediately. The callee
          *     receives a `call.invite` event and gets its join info from
          *     `POST /v1/calls/{call_id}/accept`.
+         *
+         *     Targeted calls: the agent may pass `device_ids` to ring only those phones.
+         *     The call is then private to them: the other phones get none of its events
+         *     (WebSocket, push or `GET /v1/events`), do not see it in `GET /v1/calls`,
+         *     `GET /v1/calls/{call_id}` (404) or `active_call` in `GET /v1/status`, and
+         *     cannot accept, decline or join it (403).
          */
         post: operations["createCall"];
         delete?: never;
@@ -237,7 +243,8 @@ export interface paths {
          *     still rings it is the same as accepting (the call becomes `active`). Emits
          *     `call.accept` with this phone's `device_id` (once per phone that joins); a
          *     phone already on the call just gets a new token (no event). Only agent calls
-         *     (`agent_to_user`) can be joined.
+         *     (`agent_to_user`) can be joined, and a targeted call (`device_ids`) only by
+         *     the phones it targets.
          */
         post: operations["joinCall"];
         delete?: never;
@@ -547,6 +554,14 @@ export interface components {
             priority: components["schemas"]["Priority"];
             /** @description Display name override for this call (agent only). */
             agent_name?: string;
+            /**
+             * @description Agent only: ring only these paired, non-revoked phones (a targeted
+             *     call) instead of every paired phone. Only they get the invite, can
+             *     answer, decline or join, and see the call at all. Duplicates are
+             *     ignored. Unknown or revoked ids, an empty list, or a device caller
+             *     sending it → `400 invalid_request`.
+             */
+            device_ids?: components["schemas"]["DeviceId"][];
         };
         Call: {
             call_id: components["schemas"]["CallId"];
@@ -563,6 +578,8 @@ export interface components {
             duration_ms?: number;
             /** @description Device that placed or answered the call. */
             device_id?: components["schemas"]["DeviceId"];
+            /** @description Targeted call only; the phones it rings. Absent = every paired phone. */
+            device_ids?: components["schemas"]["DeviceId"][];
         };
         JoinInfo: {
             /**
@@ -636,6 +653,11 @@ export interface components {
             priority: components["schemas"]["Priority"];
             /** @description Do not ring after this instant (= created + ring timeout). */
             expires_at: components["schemas"]["Timestamp"];
+            /**
+             * @description Targeted call only; the phones it rings. The relay never delivers the
+             *     events of a targeted call to other phones, so clients need not filter.
+             */
+            device_ids?: components["schemas"]["DeviceId"][];
         } & {
             /**
              * @description discriminator enum property added by openapi-typescript
@@ -1078,7 +1100,15 @@ export interface operations {
                     "application/json": components["schemas"]["CallWithJoin"];
                 };
             };
-            400: components["responses"]["BadRequest"];
+            /** @description `invalid_request`, e.g. a missing `reason` (agent caller), an empty `device_ids`, an unknown or revoked device id, or `device_ids` sent by a device. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             401: components["responses"]["Unauthorized"];
             /** @description `busy` (another call is ringing/active) or `no_devices` (agent caller, nothing paired). */
             409: {
@@ -1193,7 +1223,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
-            /** @description `forbidden` (not an agent call). */
+            /** @description `forbidden` (not an agent call, or a targeted call this phone is not in). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -1423,6 +1453,12 @@ export interface operations {
                         /** @description Highest seq in the relay log (not just in this page). */
                         last_seq: number;
                         has_more: boolean;
+                        /**
+                         * @description Pass as `after_seq` for the next page. It can be past the last
+                         *     returned event when events this caller may not see (another
+                         *     phone's targeted call) were left out of the page.
+                         */
+                        next_after_seq?: number;
                     };
                 };
             };

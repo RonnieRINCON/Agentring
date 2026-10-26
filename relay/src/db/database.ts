@@ -74,6 +74,10 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (call_id, device_id)
   );
   `,
+  `
+  -- Targeted calls: JSON array of the device ids the call rings; NULL = every paired phone.
+  ALTER TABLE calls ADD COLUMN device_ids TEXT;
+  `,
 ];
 
 export type Db = DatabaseSync;
