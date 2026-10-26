@@ -71,6 +71,10 @@ class VoiceSession(
 
     private val _signals = MutableStateFlow<Signal?>(null)
     val signals: StateFlow<Signal?> = _signals
+
+    /** The agent is in the room (for calls to the agent: it picked up). */
+    private val _agentInRoom = MutableStateFlow(false)
+    val agentInRoom: StateFlow<Boolean> = _agentInRoom
     private var eventsJob: Job? = null
     @Volatile private var closing = false
 
@@ -86,9 +90,10 @@ class VoiceSession(
                 when (e) {
                     is RoomEvent.Reconnecting -> _signals.value = Signal.Reconnecting
                     is RoomEvent.Reconnected -> _signals.value = Signal.Reconnected
+                    is RoomEvent.ParticipantConnected -> if (e.participant.identity?.value == AGENT_IDENTITY) _agentInRoom.value = true
                     is RoomEvent.ParticipantDisconnected -> {
                         Log.i(TAG, "${e.participant.identity} left")
-                        if (e.participant.identity?.value == "agent") _signals.value = Signal.Gone("agent_left")
+                        if (e.participant.identity?.value == AGENT_IDENTITY) _signals.value = Signal.Gone("agent_left")
                     }
                     is RoomEvent.Disconnected -> if (!closing) _signals.value = Signal.Gone("disconnected: ${e.reason}")
                     else -> Unit
@@ -96,6 +101,8 @@ class VoiceSession(
             }
         }
         room.connect(url, token, ConnectOptions(audio = withMic))
+        // The agent may have joined before us: no ParticipantConnected event then.
+        if (room.remoteParticipants.values.any { it.identity?.value == AGENT_IDENTITY }) _agentInRoom.value = true
     }
 
     fun setMuted(muted: Boolean) {
@@ -124,5 +131,7 @@ class VoiceSession(
 
     private companion object {
         const val TAG = "VoiceSession"
+        /** The relay's LiveKit identity for the agent (`identityOf` in relay/src/routes/calls.ts). */
+        const val AGENT_IDENTITY = "agent"
     }
 }

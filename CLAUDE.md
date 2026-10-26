@@ -27,7 +27,7 @@ self-hosted, no accounts.
 | **M1** | relay + pairing + messages + push | **Done**; verified on the user's Pixel 6 (Android 16), FCM incl. forced Doze (~1.5 s). |
 | **M2** | phone rings locked / Doze in < 5 s with native call UI; audio (echo/tone is fine) | **In progress**: works on the Pixel 6 (locked + Doze → call screen in 1.6 s, in the room ~0.5 s after answer). Group calls + "join the call" while active (`POST /v1/calls/{id}/join`, Join notification/banner; not yet tested on a real phone). TODO: LiveKit in deploy compose, user's listening test, OK. |
 | M3 | Gemini Live conversation (< 1 s turns), OpenAI Realtime optional; `consult_agent` with `backend: command` | |
-| M4 | call the agent from the app; missed/declined fallbacks | |
+| M4 | call the agent from the app; missed/declined fallbacks | **In progress**: app side done on branch `m4-call-agent` ("Call agent" → `POST /v1/calls`, joins the room at once, "Calling…" until `call.accept` / agent in the room / poll, cancel while ringing, agent offline / busy / declined / missed messages; not yet tested on a real phone). Agent side (accepting inbound calls) is built separately; missed → `msg.new` fallback still TODO. |
 | M5 | MCP server, skill, examples, docs, < 15 min quickstart with `docker compose up` | |
 
 Agreed direction for M3: keep agentring agnostic with two plug points — the

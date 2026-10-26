@@ -45,6 +45,9 @@ class RelayApi(
         @SerialName("client_msg_id") val clientMsgId: String? = null,
     )
 
+    @Serializable
+    private data class CreateCallBody(val reason: String? = null)
+
     fun pair(req: PairRequest): PairResponse =
         call("POST", "/v1/pair", body(PairRequest.serializer(), req), PairResponse.serializer(), auth = false)
 
@@ -74,6 +77,14 @@ class RelayApi(
     fun markRead(msgId: String) {
         call<Unit>("POST", "/v1/messages/$msgId/read", "".toRequestBody(null), null)
     }
+
+    /**
+     * Calls the agent (M4, direction `user_to_agent`). The relay returns this
+     * phone's LiveKit join info right away; the call rings until the agent accepts.
+     * Fails with 503 `agent_offline` / `calls_unavailable` or 409 `busy`.
+     */
+    fun createCall(reason: String? = null): CallWithJoin =
+        call("POST", "/v1/calls", body(CreateCallBody.serializer(), CreateCallBody(reason)), CallWithJoin.serializer())
 
     fun getCall(callId: String): Call = call("GET", "/v1/calls/$callId", null, Call.serializer())
 

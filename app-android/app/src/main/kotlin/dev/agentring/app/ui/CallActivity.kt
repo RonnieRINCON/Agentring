@@ -58,7 +58,8 @@ import kotlinx.coroutines.launch
 
 /**
  * Full-screen call UI. Shown over the lock screen (it's the notification's
- * full-screen intent) and opened by the Answer and Join actions.
+ * full-screen intent) and opened by the Answer and Join actions, and by
+ * "Call agent" once the call is placed ([outgoingIntent]).
  */
 class CallActivity : ComponentActivity() {
     private var proximity: PowerManager.WakeLock? = null
@@ -140,7 +141,7 @@ class CallActivity : ComponentActivity() {
 
     /** Screen off when the phone is at the ear (earpiece only). */
     private fun updateProximity(s: CallUi?) {
-        val want = s is CallUi.Active && !s.speaker || s is CallUi.Connecting
+        val want = s is CallUi.Active && !s.speaker || s is CallUi.Connecting || s is CallUi.Outgoing
         val pm = getSystemService(PowerManager::class.java)
         if (want && proximity == null && pm.isWakeLockLevelSupported(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
             proximity = pm.newWakeLock(PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK, "agentring:proximity").apply { acquire(3 * 60 * 60 * 1000L) }
@@ -162,6 +163,10 @@ class CallActivity : ComponentActivity() {
         private const val EXTRA_AGENT_NAME = "agent_name"
         private const val EXTRA_REASON = "reason"
         private const val EXTRA_URGENT = "urgent"
+
+        /** Opens the call screen for the call to the agent that [dev.agentring.app.call.CallManager.callAgent] placed. */
+        fun outgoingIntent(context: Context): Intent =
+            Intent(context, CallActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
 
         /** Opens the call screen and joins [info]'s call ("join the call"). */
         fun joinIntent(context: Context, info: CallInfo): Intent =
@@ -232,7 +237,7 @@ fun CallScreen(
                     RoundButton(R.drawable.ic_call_end, stringResource(R.string.call_decline), Red, onDecline, "call_decline")
                     RoundButton(R.drawable.ic_call, stringResource(R.string.call_answer), Green, onAnswer, "call_answer")
                 }
-                is CallUi.Connecting, is CallUi.Active -> {
+                is CallUi.Outgoing, is CallUi.Connecting, is CallUi.Active -> {
                     val active = state as? CallUi.Active
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                         ToggleButton(
@@ -264,6 +269,7 @@ fun CallScreen(
 @Composable
 private fun statusText(state: CallUi): String = when (state) {
     is CallUi.Incoming -> stringResource(R.string.call_incoming)
+    is CallUi.Outgoing -> stringResource(R.string.call_calling, state.info.agentName)
     is CallUi.Connecting -> stringResource(R.string.call_connecting)
     is CallUi.Active -> if (state.reconnecting) stringResource(R.string.call_reconnecting) else elapsed(state.since)
     is CallUi.Ended -> stringResource(state.messageRes)

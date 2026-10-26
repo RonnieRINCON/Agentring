@@ -40,7 +40,15 @@
     <string name="push_unavailable">No disponible: %1$s</string>
     <string name="push_error">Error: %1$s</string>
     <string name="call_agent">Llamar al agente</string>
-    <string name="call_soon">Las llamadas de voz llegan en los próximos hitos.</string>
+    <string name="call_calling">Llamando a %1$s…</string>
+    <string name="call_agent_hint">Habla con %1$s por voz.</string>
+    <string name="call_agent_offline">El agente está desconectado</string>
+    <string name="call_agent_busy">Hay otra llamada en curso</string>
+    <string name="call_agent_unavailable">Las llamadas no están configuradas en tu relay (LiveKit)</string>
+    <string name="call_agent_declined">El agente ha rechazado la llamada</string>
+    <string name="call_agent_no_answer">El agente no ha contestado</string>
+    <string name="call_agent_needs_relay">Sin conexión con tu relay</string>
+    <string name="call_agent_in_call">Estás en una llamada</string>
     <string name="revoked_title">Este móvil se ha desemparejado</string>
     <string name="revoked_body">El relay ya no acepta este móvil. Vuelve a emparejarlo con agentring pair.</string>
     <string name="pair_again">Emparejar de nuevo</string>

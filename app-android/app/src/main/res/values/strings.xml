@@ -44,7 +44,15 @@
     <string name="push_unavailable">Unavailable: %1$s</string>
     <string name="push_error">Error: %1$s</string>
     <string name="call_agent">Call agent</string>
-    <string name="call_soon">Voice calls arrive in the next milestones.</string>
+    <string name="call_calling">Calling %1$s…</string>
+    <string name="call_agent_hint">Talk to %1$s by voice.</string>
+    <string name="call_agent_offline">The agent is offline</string>
+    <string name="call_agent_busy">Another call is in progress</string>
+    <string name="call_agent_unavailable">Calls are not set up on your relay (LiveKit)</string>
+    <string name="call_agent_declined">The agent declined the call</string>
+    <string name="call_agent_no_answer">The agent didn\'t answer</string>
+    <string name="call_agent_needs_relay">Not connected to your relay</string>
+    <string name="call_agent_in_call">You are on a call</string>
     <string name="revoked_title">This phone was unpaired</string>
     <string name="revoked_body">The relay no longer accepts this phone. Pair it again with agentring pair.</string>
     <string name="pair_again">Pair again</string>
