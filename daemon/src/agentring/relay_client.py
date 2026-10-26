@@ -90,6 +90,9 @@ class RelayClient:
     def get_call(self, call_id: str) -> dict:
         return self._request("GET", f"/v1/calls/{call_id}")
 
+    def accept_call(self, call_id: str) -> dict:
+        return self._request("POST", f"/v1/calls/{call_id}/accept")
+
     def end_call(self, call_id: str) -> dict:
         return self._request("POST", f"/v1/calls/{call_id}/end")
 

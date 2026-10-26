@@ -15,7 +15,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Voice worker (M2+): LiveKit realtime SDK; livekit-agents and model plugins in M3.
+# Voice (M2+): LiveKit realtime SDK (brings numpy). The AI models are spoken to directly over
+# their WebSocket APIs (websockets, already a dependency): no livekit-agents, no provider SDKs.
 voice = ["livekit>=1.1.20,<1.2"]
 
 [project.scripts]

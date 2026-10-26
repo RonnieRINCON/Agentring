@@ -74,3 +74,11 @@ def write_settings(relay_url: str, api_key: str) -> Path:
         f.write("\n".join(lines) + "\n")
     env_path.chmod(0o600)
     return home
+
+
+def secret(name: str) -> str | None:
+    """A secret from the environment or ~/.agentring/.env (e.g. GEMINI_API_KEY)."""
+    if os.environ.get(name):
+        return os.environ[name]
+    env = home_dir() / ".env"
+    return (dotenv_values(env).get(name) or None) if env.exists() else None

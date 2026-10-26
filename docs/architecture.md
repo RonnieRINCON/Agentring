@@ -35,7 +35,7 @@ F1 scope: one user, one agent, Android only, self-hosted, no accounts.
 | Component | Responsibility | Stack |
 |---|---|---|
 | `relay` | Pairing, device registry, call state machine + ring timeout, message store, event log + fan-out (WS), push (FCM), LiveKit room/token minting, LiveKit webhook. Source of truth for calls and messages. | Node 22, TypeScript, Fastify 5, `@fastify/websocket`, `better-sqlite3`, `livekit-server-sdk`, `jose`, `google-auth-library` (FCM HTTP v1) |
-| `daemon` | Agent-side endpoint. CLI, MCP server, local HTTP API, persistent relay connection, voice worker. Mirrors calls/messages into its own SQLite and stores transcripts + summaries. | Python ≥ 3.11, `uv`, typer, httpx, websockets, Starlette/uvicorn, official `mcp` SDK, `livekit-agents` (optional extra `agentring[voice]`) |
+| `daemon` | Agent-side endpoint. CLI, MCP server, local HTTP API, persistent relay connection, voice worker. Mirrors calls/messages into its own SQLite and stores transcripts + summaries. | Python ≥ 3.11, `uv`, typer, httpx, websockets, Starlette/uvicorn, official `mcp` SDK, `livekit` realtime SDK (optional extra `agentring[voice]`) |
 | `app-android` | Pairing (QR), push handling, self-managed `ConnectionService`, CallStyle + full-screen intent, LiveKit audio, messages thread. | Kotlin, Compose, Material 3, OkHttp, kotlinx.serialization, Room, CameraX + ML Kit barcode, LiveKit Android SDK, Firebase Messaging |
 | `livekit-server` | SFU; handles NAT traversal (ICE/TURN). One room per call. | upstream image, self-hosted |
 | `caddy` | Automatic TLS, reverse proxy. | upstream image |
@@ -184,3 +184,12 @@ CI fails if generated code is stale or a fixture doesn't round-trip.
 | **M3** | — | Gemini Live / OpenAI Realtime, `consult_agent`, `end_call`, transcripts + summaries, `--wait` | live transcript | — |
 | **M4** | inbound calls, missed/declined | auto-accept inbound, missed → `msg.new` fallback | "Call agent", missed/declined UX | — |
 | **M5** | — | MCP server, local HTTP API | — | skill, examples, docs, quickstart |
+
+## Accepted deviations
+
+- **M3 voice without `livekit-agents`** (proposed on branch `m3-voice-ai`, pending the
+  user's OK): the voice worker uses the plain `livekit` SDK (already used by the M2 echo
+  worker) and talks to the model's realtime WebSocket API directly through a small
+  `RealtimeBackend` interface. Fewer dependencies (supply-chain policy) and full control
+  of turn-taking, group-call mixing and tools. Details in [voice.md](voice.md).
+

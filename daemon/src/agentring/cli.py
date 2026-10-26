@@ -16,7 +16,7 @@ import segno
 import typer
 
 from . import __version__
-from .config import ConfigError, Settings, load_settings, write_settings
+from .config import ConfigError, Settings, load_settings, secret, write_settings
 from .relay_client import RelayClient, RelayError
 from .store import Store
 from .sync import FatalSyncError, catch_up, run_ws
@@ -31,6 +31,46 @@ devices_app = typer.Typer(help="List or revoke paired phones.", no_args_is_help=
 app.add_typer(devices_app, name="devices")
 
 JsonOpt = Annotated[bool, typer.Option("--json", help="Machine-readable JSON output.")]
+AiOpt = Annotated[bool, typer.Option("--ai", help="A voice AI (Gemini Live, needs GEMINI_API_KEY) talks on the call.")]
+InstructionsOpt = Annotated[
+    Optional[str], typer.Option("--instructions", help="--ai: system prompt, or @file to read it from a file.")
+]
+McpOpt = Annotated[Optional[list[str]], typer.Option("--mcp", help="--ai: MCP server URL whose tools the AI may use (repeatable).")]
+ToolsOpt = Annotated[Optional[str], typer.Option("--tools", help="--ai: comma-separated allowlist of MCP tools.")]
+ModelOpt = Annotated[Optional[str], typer.Option("--model", help="--ai: Gemini Live model (default gemini-3.8-live).")]
+
+
+async def _build_ai(instructions: str | None, mcp: list[str] | None, tools: str | None, model: str | None,
+                    voice: str | None) -> tuple[Any, list[Any]]:
+    try:
+        from .voice.quick import build_agent
+    except ImportError:
+        raise _fail("voice support is not installed: install agentring with the [voice] extra") from None
+    key = secret("GEMINI_API_KEY")
+    if not key:
+        raise _fail("--ai needs GEMINI_API_KEY (environment or ~/.agentring/.env)")
+    allow = [t.strip() for t in tools.split(",") if t.strip()] if tools else None
+    try:
+        return await build_agent(key, instructions=instructions, mcp=mcp, allow=allow, model=model, voice=voice)
+    except OSError as e:
+        raise _fail(f"cannot read the instructions: {e}") from None
+
+
+def _print_result(r: Any) -> None:
+    for role, text in r.transcript:
+        typer.echo(f"  {'you' if role == 'user' else 'agent'}: {text}")
+    for t in r.tools:
+        typer.echo(f"  [tool] {t['name']} {json.dumps(t['args'], ensure_ascii=False)} → {t['output'][:120]}")
+    typer.echo(f"Call {r.end_reason}, {r.duration_s} s" if r.answered else f"Call {r.end_reason}")
+
+
+def _signals(stop: asyncio.Event) -> None:
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, stop.set)
+        except NotImplementedError:  # Windows
+            pass
 
 
 def _now_ms() -> int:
@@ -177,10 +217,19 @@ def call(
     greeting: Annotated[
         Optional[str], typer.Option("--greeting", help="What the agent says when the user answers (default: the reason).")
     ] = None,
-    voice: Annotated[Optional[str], typer.Option("--voice", help="macOS `say` voice for the greeting.")] = None,
+    voice: Annotated[
+        Optional[str], typer.Option("--voice", help="With --ai the model's voice (e.g. Charon); otherwise the macOS `say` voice.")
+    ] = None,
+    ai: AiOpt = False,
+    instructions: InstructionsOpt = None,
+    mcp: McpOpt = None,
+    tools: ToolsOpt = None,
+    model: ModelOpt = None,
     json_out: JsonOpt = False,
 ) -> None:
-    """Call the phone. Rings until answered (30 s); on answer the agent greets and echoes you (M2 audio test)."""
+    """Call the phone. Rings until answered (30 s). With --ai a voice AI talks to you; otherwise the agent greets and echoes you (audio test)."""
+    if ai:
+        return _ai_call(reason, urgent, agent_name, instructions, mcp, tools, model, voice, json_out)
     try:
         from .voice.echo import EchoWorker, synthesize
     except ImportError:
@@ -413,6 +462,43 @@ def devices_list(
         typer.echo(f"{d['device_id']}  {d['name']:<24} paired {_fmt_ts(d['created_at'])}  {state}")
 
 
+def _ai_call(reason: str, urgent: bool, agent_name: str | None, instructions: str | None, mcp: list[str] | None,
+             tools: str | None, model: str | None, voice: str | None, json_out: bool) -> None:
+    from .voice import CallInfo
+
+    s = _settings()
+    client = _client(s)
+
+    async def run() -> Any:
+        agent, mcp_clients = await _build_ai(instructions, mcp, tools, model, voice)
+        try:
+            created = await asyncio.to_thread(
+                client.create_call, reason, priority="urgent" if urgent else "normal", agent_name=agent_name
+            )
+        except RelayError as e:
+            raise _fail(str(e)) from None
+        if not json_out:
+            typer.echo(f"Calling… {created['call']['call_id']} (Ctrl+C to hang up)")
+        stop = asyncio.Event()
+        _signals(stop)
+        try:
+            return await agent.run(CallInfo(created["call"]["call_id"], reason), created["join"], relay=client, stop=stop)
+        finally:
+            for c in mcp_clients:
+                await c.aclose()
+
+    try:
+        result = asyncio.run(run())
+    finally:
+        client.close()
+    if json_out:
+        from dataclasses import asdict
+
+        _emit_json(asdict(result))
+    else:
+        _print_result(result)
+
+
 @devices_app.command("revoke")
 def devices_revoke(device_id: Annotated[str, typer.Argument(help="Device id (dev_...).")]) -> None:
     """Revoke a device: its credentials stop working immediately."""
@@ -438,28 +524,64 @@ def _describe(event: dict[str, Any]) -> str | None:
 
 
 @app.command()
-def serve() -> None:
-    """Run the daemon: keeps a live connection to the relay (MCP, HTTP API and voice worker come in later milestones)."""
+def serve(
+    ai: Annotated[bool, typer.Option("--ai", help="Answer calls from the phone with a voice AI (needs GEMINI_API_KEY).")] = False,
+    instructions: InstructionsOpt = None,
+    mcp: McpOpt = None,
+    tools: ToolsOpt = None,
+    model: ModelOpt = None,
+    voice: Annotated[Optional[str], typer.Option("--voice", help="--ai: the model's voice (e.g. Charon).")] = None,
+) -> None:
+    """Run the daemon: keeps a live connection to the relay. With --ai, answers the phone's calls with a voice AI."""
     s = _settings()
     store = Store(s.db_path)
     client = _client(s)
     log = logging.getLogger("agentring")
 
-    def on_event(e: dict[str, Any]) -> None:
+    calls: set[asyncio.Task] = set()
+    voice_agent: Any = None
+
+    async def answer(e: dict[str, Any], stop: asyncio.Event) -> None:
+        from .voice import accept_incoming
+
+        if calls - {asyncio.current_task()}:
+            log.info("already on a call; not answering %s", e["call_id"])
+            return
+        accepted = await asyncio.to_thread(accept_incoming, client, e)
+        if not accepted:
+            return
+        info, join = accepted
+        log.info("answering %s", info.call_id)
+        r = await voice_agent.run(info, join, relay=client, stop=stop)
+        log.info("call %s: %s, %d s, %d turns", info.call_id, r.end_reason, r.duration_s, len(r.transcript))
+
+    def on_event(e: dict[str, Any], stop: asyncio.Event | None = None) -> None:
         d = _describe(e)
         if d:
             log.info(d)
+        if voice_agent is not None and stop is not None and e.get("type") == "call.invite":
+            from .voice import is_incoming_call
+
+            if is_incoming_call(e):
+                t = asyncio.get_running_loop().create_task(answer(e, stop))
+                calls.add(t)
+                t.add_done_callback(calls.discard)
 
     async def main() -> None:
+        nonlocal voice_agent
         stop = asyncio.Event()
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                loop.add_signal_handler(sig, stop.set)
-            except NotImplementedError:  # Windows
-                pass
+        _signals(stop)
+        mcp_clients: list[Any] = []
+        if ai:
+            voice_agent, mcp_clients = await _build_ai(instructions, mcp, tools, model, voice)
+            log.info("answering calls with %d tools", len(voice_agent.tools))
         log.info("agentring %s serving; relay %s", __version__, s.relay_url)
-        await run_ws(client, s.api_key, store, on_event, stop=stop)
+        try:
+            await run_ws(client, s.api_key, store, lambda e: on_event(e, stop), stop=stop)
+            await asyncio.gather(*calls, return_exceptions=True)
+        finally:
+            for c in mcp_clients:
+                await c.aclose()
 
     try:
         asyncio.run(main())
