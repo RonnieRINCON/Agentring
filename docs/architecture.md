@@ -187,8 +187,8 @@ CI fails if generated code is stale or a fixture doesn't round-trip.
 
 ## Accepted deviations
 
-- **M3 voice without `livekit-agents`** (proposed on branch `m3-voice-ai`, pending the
-  user's OK): the voice worker uses the plain `livekit` SDK (already used by the M2 echo
+- **M3 voice without `livekit-agents`** (merged in #2, at the user's
+  request): the voice worker uses the plain `livekit` SDK (already used by the M2 echo
   worker) and talks to the model's realtime WebSocket API directly through a small
   `RealtimeBackend` interface. Fewer dependencies (supply-chain policy) and full control
   of turn-taking, group-call mixing and tools. Details in [voice.md](voice.md).
