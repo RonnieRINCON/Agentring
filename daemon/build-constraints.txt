@@ -1,0 +1,9 @@
+# Exact versions of the build backend and its dependencies, used by `uv build -b`
+# (daemon/Dockerfile and .github/workflows/release.yml), so building the wheel never
+# pulls a just-published release. All >= 2 weeks old on 2026-10-27.
+hatchling==1.32.4
+packaging==26.3
+pathspec==1.1.1
+pluggy==1.6.0
+tomlkit==0.15.1
+trove-classifiers==2026.9.21.13

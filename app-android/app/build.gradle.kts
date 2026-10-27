@@ -5,6 +5,25 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+// Release signing: a Gradle property (-PAGENTRING_KEYSTORE_FILE=…) or an environment
+// variable of the same name. Without a keystore, release builds fall back to the debug
+// key (local builds keep working); AGENTRING_REQUIRE_RELEASE_KEY=1 turns that into an error.
+fun signingValue(name: String): String? =
+    (providers.gradleProperty(name).orNull ?: providers.environmentVariable(name).orNull)?.takeIf { it.isNotBlank() }
+
+val releaseKeystore = signingValue("AGENTRING_KEYSTORE_FILE")
+val requireReleaseKey = signingValue("AGENTRING_REQUIRE_RELEASE_KEY") == "1"
+val buildsRelease = gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }
+if (releaseKeystore == null && buildsRelease) {
+    if (requireReleaseKey) {
+        throw GradleException("AGENTRING_KEYSTORE_FILE is not set and AGENTRING_REQUIRE_RELEASE_KEY=1")
+    }
+    logger.warn(
+        "WARNING: AGENTRING_KEYSTORE_FILE is not set: the release APK is signed with the public " +
+            "DEBUG key. Fine for local testing, never publish it.",
+    )
+}
+
 android {
     namespace = "dev.agentring.app"
     compileSdk = 35
@@ -13,8 +32,9 @@ android {
         applicationId = "dev.agentring.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-m1"
+        // Release builds pass both: -PversionName=0.2.0 -PversionCode=20099 (see docs/release.md).
+        versionCode = providers.gradleProperty("versionCode").orNull?.toInt() ?: 1
+        versionName = providers.gradleProperty("versionName").orNull ?: "0.2.0-dev"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -26,6 +46,16 @@ android {
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = signingValue("AGENTRING_KEYSTORE_PASSWORD")
+                    ?: throw GradleException("AGENTRING_KEYSTORE_PASSWORD is not set")
+                keyAlias = signingValue("AGENTRING_KEY_ALIAS") ?: throw GradleException("AGENTRING_KEY_ALIAS is not set")
+                // PKCS12 keystores (keytool's default) use the store password for the key too.
+                keyPassword = signingValue("AGENTRING_KEY_PASSWORD") ?: storePassword
+            }
+        }
     }
 
     buildTypes {
@@ -34,7 +64,7 @@ android {
         }
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(if (releaseKeystore != null) "release" else "debug")
         }
     }
 
@@ -54,6 +84,13 @@ android {
 
     testOptions {
         animationsDisabled = true
+    }
+
+    lint {
+        // Fatal in release builds, but a false positive here: registerForActivityResult is
+        // only called on ComponentActivity (no Fragment), and androidx.fragment 1.1.0 is
+        // only on the classpath through play-services-basement.
+        disable += "InvalidFragmentVersionForActivityResult"
     }
 }
 

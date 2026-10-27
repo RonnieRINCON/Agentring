@@ -3,7 +3,7 @@
     <string name="you">Tú</string>
 
     <string name="welcome_title">Tu agente puede llamarte</string>
-    <string name="welcome_body">agentring permite que tu agente de IA (Claude Code, OpenClaw, n8n, scripts…) te mande mensajes y, pronto, te llame como una llamada de verdad. Todo pasa por tu propio relay.</string>
+    <string name="welcome_body">agentring permite que tu agente de IA (Claude Code, OpenClaw, n8n, scripts…) te mande mensajes y te llame como una llamada de verdad, y que tú le llames a él. Todo pasa por tu propio relay.</string>
     <string name="get_started">Empezar</string>
     <string name="notif_title">Permite las notificaciones</string>
     <string name="notif_body">Los mensajes de tu agente llegan como notificaciones a las que puedes responder directamente.</string>
@@ -18,7 +18,7 @@
     <string name="pairing">Emparejando…</string>
     <string name="scan_failed">No se pudo escanear: %1$s</string>
     <string name="done_title">Emparejado con %1$s</string>
-    <string name="done_body">Pruébalo desde tu ordenador:\n\nagentring msg "hola"</string>
+    <string name="done_body">Pruébalo desde tu ordenador:\n\nagentring msg "hola"\nagentring call "prueba"</string>
     <string name="done_no_push">Tu relay no tiene configuradas las notificaciones push, así que los mensajes solo llegan con la app abierta. Mira docs/firebase.md.</string>
     <string name="continue_">Continuar</string>
 

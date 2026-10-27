@@ -1,5 +1,20 @@
-# Automatic HTTPS (Let's Encrypt) for the relay. WebSockets pass through as-is.
+# Automatic HTTPS (Let's Encrypt) on one hostname for the relay and LiveKit
+# signalling. WebSockets pass through as-is.
 {$AGENTRING_DOMAIN} {
 	encode gzip
-	reverse_proxy relay:8080
+	header Strict-Transport-Security "max-age=31536000"
+	header -Server
+	# LiveKit's admin API and the relay's webhook are internal only.
+	handle /twirp/* {
+		respond 404
+	}
+	handle /v1/livekit/webhook {
+		respond 404
+	}
+	handle /rtc* {
+		reverse_proxy livekit:7880
+	}
+	handle {
+		reverse_proxy relay:8080
+	}
 }

@@ -1,10 +1,22 @@
 [project]
 name = "agentring"
-version = "0.1.0"
+version = "0.2.0.dev0"
 description = "Let any AI agent call your phone over VoIP and message you (daemon + CLI)"
 readme = "README.md"
 license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
+authors = [{ name = "agentring contributors" }]
+keywords = ["ai-agent", "voip", "livekit", "android", "notifications", "mcp"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Communications :: Telephony",
+]
 dependencies = [
   "typer>=0.15",
   "httpx>=0.28",
@@ -13,6 +25,12 @@ dependencies = [
   "pyyaml>=6",
   "python-dotenv>=1.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mutonby/agentring"
+Documentation = "https://github.com/mutonby/agentring/tree/HEAD/docs"
+Issues = "https://github.com/mutonby/agentring/issues"
+Source = "https://github.com/mutonby/agentring"
 
 [project.optional-dependencies]
 # Voice (M2+): LiveKit realtime SDK (brings numpy). The AI models are spoken to directly over
@@ -31,6 +49,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agentring"]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["Dockerfile", ".dockerignore", "build-constraints.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

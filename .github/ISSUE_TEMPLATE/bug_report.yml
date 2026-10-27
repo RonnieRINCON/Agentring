@@ -1,0 +1,83 @@
+name: Bug report
+description: Something doesn't work (calls don't ring, messages don't arrive, a command fails…)
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problem? Don't file it here: see [SECURITY.md](https://github.com/mutonby/agentring/blob/HEAD/SECURITY.md).
+        Calls not ringing with the screen off? Check [docs/troubleshooting-oem.md](https://github.com/mutonby/agentring/blob/HEAD/docs/troubleshooting-oem.md) first.
+        Remove API keys (`ak_…`), JWTs, FCM tokens and pairing codes from anything you paste.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Lock the phone, wait 10 min
+        2. agentring call "test"
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      multiple: true
+      options:
+        - Android app
+        - relay
+        - daemon / CLI
+        - voice AI (--ai)
+        - deploy (docker compose, Caddy, LiveKit)
+        - docs
+    validations:
+      required: true
+  - type: input
+    id: phone
+    attributes:
+      label: Phone model
+      placeholder: Pixel 6, Galaxy S23, Redmi Note 12…
+  - type: input
+    id: android
+    attributes:
+      label: Android version and OEM skin
+      placeholder: Android 14, One UI 6.1 / HyperOS 1.0 / stock
+  - type: textarea
+    id: battery
+    attributes:
+      label: Battery and background settings
+      description: |
+        The app's "Ready to take calls" checklist (Settings tab): which items are OK?
+        Plus any OEM settings you changed (Autostart, "Never sleeping apps", battery saver, app locked in recents…).
+  - type: input
+    id: app-version
+    attributes:
+      label: App version
+      description: Settings tab → Version.
+  - type: input
+    id: relay-version
+    attributes:
+      label: Relay version and deployment
+      description: "`agentring status` prints the relay version. Deployment: docker-compose.yml, docker-compose.proxy.yml, Coolify, or bare `npm start`."
+  - type: input
+    id: daemon-version
+    attributes:
+      label: Daemon version
+      description: "`agentring version`, and the OS it runs on."
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Whatever applies:
+        - phone: `adb logcat -s PushHandler AgentringFCM CallManager CallService TelecomBridge Ringer VoiceSession`
+        - relay: `docker compose logs relay`
+        - daemon: the output of the failing command (`agentring call` prints a timeline)
+      render: text

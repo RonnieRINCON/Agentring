@@ -1,0 +1,10 @@
+# Only pyproject.toml, uv.lock, README.md, LICENSE and src/ are needed to build.
+.venv
+.pytest_cache
+tests
+dist
+**/__pycache__
+*.pyc
+.env*
+*.db*
+Dockerfile

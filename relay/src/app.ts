@@ -39,7 +39,8 @@ export interface BuiltApp {
 
 /**
  * The API key comes from AGENTRING_API_KEY or is generated on first start and
- * persisted (only its value in DATA_DIR/api_key, readable by the owner).
+ * persisted in the database's meta table and in DATA_DIR/api_key (mode 0600), so
+ * the operator can read it once. Requests are checked against its hash.
  */
 function resolveApiKey(cfg: Config, db: Db): { apiKey: string; generated: boolean } {
   if (cfg.apiKey) {

@@ -10,15 +10,24 @@ Three pieces:
 ## 1. Relay (docker compose)
 
 Requirements: a Linux server with Docker, a DNS record (e.g. `relay.example.com`)
-pointing at it, and ports 80 and 443 open.
+pointing at it, and these ports open (also in any cloud firewall in front of it;
+Docker-published ports bypass `ufw`):
+
+- TCP 80 and 443: Caddy (automatic Let's Encrypt certificate).
+- UDP 50000–50100 and TCP 7881: call audio (LiveKit).
 
 ```bash
 git clone https://github.com/mutonby/agentring && cd agentring/deploy
 cp .env.example .env
-nano .env                          # set AGENTRING_DOMAIN (and AGENTRING_AGENT_NAME)
+nano .env                          # set AGENTRING_DOMAIN (+ AGENTRING_AGENT_NAME, LIVEKIT_NODE_IP)
 docker compose up -d --build
 docker compose logs relay | grep -A2 "API key"
 ```
+
+This starts the relay, LiveKit and Caddy on one hostname. The LiveKit secret is
+generated on first start inside Docker volumes and never goes through `.env`.
+`LIVEKIT_NODE_IP` is the server's public IPv4; leave it empty to let LiveKit find
+it over STUN.
 
 The relay generates its **API key** on first start and prints it once (it's
 also stored in the data volume: `docker compose exec relay cat /data/api_key`).
@@ -36,17 +45,20 @@ AGENTRING_INSECURE_DEV=1 AGENTRING_PUBLIC_URL=http://192.168.1.20:8080 npm start
 ```
 
 The app only accepts `http://` relays on private addresses (10.x, 192.168.x,
-172.16–31.x, localhost, `*.local`).
+172.16–31.x, 127.x, 100.64–127.x (Tailscale/CGNAT), localhost, `::1`, `*.local`).
 
 ## 2. CLI / daemon
 
 Requires Python ≥ 3.11 and [uv](https://docs.astral.sh/uv/) (or pipx).
 
 ```bash
-uv tool install ./daemon            # from the repo checkout
+uv tool install './daemon[voice]'   # from the repo checkout; [voice] is needed for calls
 agentring init --relay https://relay.example.com --api-key ak_...
 agentring status
 ```
+
+Or run it on the server, next to the relay (`daemon` compose profile; the
+commands are at the top of `deploy/docker-compose.yml`).
 
 Configuration lives in `~/.agentring/` (`config.yaml`, and the key in `.env`,
 mode 600). `AGENTRING_RELAY_URL` / `AGENTRING_API_KEY` env vars override it.
@@ -61,7 +73,7 @@ mode 600). `AGENTRING_RELAY_URL` / `AGENTRING_API_KEY` env vars override it.
    (or copy the pairing code it prints and paste it in the app).
 4. The CLI prints `Paired with <your phone> ✓`.
 
-## 4. Try it (milestone 1)
+## 4. Try it
 
 ```bash
 agentring msg "hola"               # phone gets a notification
@@ -72,6 +84,18 @@ agentring serve                    # optional: live connection, logs events as t
 ```
 
 Other commands: `agentring devices`, `agentring devices revoke <device_id>`.
+
+Calls:
+
+```bash
+agentring call "test"              # rings; when you answer: a greeting (a beep off macOS), then your voice echoed
+echo GEMINI_API_KEY=... >> ~/.agentring/.env   # free key: https://aistudio.google.com/apikey
+agentring call "The backup failed" --ai        # a voice AI talks to you
+agentring serve --ai               # answers "Call agent" from the app
+```
+
+Next: let your agents use it, and use them from the phone: [agents.md](agents.md).
+If calls don't ring with the screen off: [troubleshooting-oem.md](troubleshooting-oem.md).
 
 ## Behind an existing reverse proxy (with calls)
 

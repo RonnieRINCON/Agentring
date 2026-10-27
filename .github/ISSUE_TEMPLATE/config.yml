@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/mutonby/agentring/security/policy
+    about: Please report vulnerabilities privately, as described in SECURITY.md.
+  - name: Calls don't ring on my phone
+    url: https://github.com/mutonby/agentring/blob/HEAD/docs/troubleshooting-oem.md
+    about: Battery savers and OEM background killers — check this guide before opening a bug.

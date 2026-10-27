@@ -34,7 +34,7 @@ F1 scope: one user, one agent, Android only, self-hosted, no accounts.
 
 | Component | Responsibility | Stack |
 |---|---|---|
-| `relay` | Pairing, device registry, call state machine + ring timeout, message store, event log + fan-out (WS), push (FCM), LiveKit room/token minting, LiveKit webhook. Source of truth for calls and messages. | Node 22, TypeScript, Fastify 5, `@fastify/websocket`, `better-sqlite3`, `livekit-server-sdk`, `jose`, `google-auth-library` (FCM HTTP v1) |
+| `relay` | Pairing, device registry, call state machine + ring timeout, message store, event log + fan-out (WS), push (FCM), LiveKit room/token minting, LiveKit webhook. Source of truth for calls and messages. | Node 22, TypeScript, Fastify 5, `@fastify/websocket`, `node:sqlite` (no native deps), `livekit-server-sdk`, `jose`; FCM HTTP v1 over plain `fetch` (no `firebase-admin`) |
 | `daemon` | Agent-side endpoint. CLI, MCP server, local HTTP API, persistent relay connection, voice worker. Mirrors calls/messages into its own SQLite and stores transcripts + summaries. | Python ≥ 3.11, `uv`, typer, httpx, websockets, Starlette/uvicorn, official `mcp` SDK, `livekit` realtime SDK (optional extra `agentring[voice]`) |
 | `app-android` | Pairing (QR), push handling, self-managed `ConnectionService`, CallStyle + full-screen intent, LiveKit audio, messages thread. | Kotlin, Compose, Material 3, OkHttp, kotlinx.serialization, Room, CameraX + ML Kit barcode, LiveKit Android SDK, Firebase Messaging |
 | `livekit-server` | SFU; handles NAT traversal (ICE/TURN). One room per call. | upstream image, self-hosted |
@@ -51,7 +51,7 @@ F1 scope: one user, one agent, Android only, self-hosted, no accounts.
   src/
     server.ts               # Fastify bootstrap, auth hooks
     config.ts               # env parsing
-    db/                     # better-sqlite3, migrations/*.sql
+    db/                     # node:sqlite, schema
     auth/                   # api key, device JWT, pairing tokens
     routes/                 # pair.ts devices.ts calls.ts messages.ts events.ts ws.ts livekit-webhook.ts
     calls/                  # state machine + ring timer
@@ -154,10 +154,11 @@ CI fails if generated code is stale or a fixture doesn't round-trip.
 9. **`consult_agent` command backend uses an argv list, not a shell string**
    (M3): `command: ["claude", "-p", "{task}"]`. The task comes from a voice
    model and must never be interpolated into a shell.
-10. **Single hostname** (M2): Caddy routes `/v1/*` to the relay and `/rtc*`,
-    `/twirp*` to LiveKit, so the quickstart needs one DNS record. LiveKit media
-    goes over UDP 50000–60000 (+ TCP 7881 fallback, + embedded TURN/TLS on 443
-    if needed).
+10. **Single hostname** (M2): Caddy routes `/v1/*` to the relay and `/rtc*` to
+    LiveKit, so the quickstart needs one DNS record. LiveKit's admin API
+    (`/twirp*`) and the relay's LiveKit webhook are internal only (404 from
+    outside); the relay reaches LiveKit over the compose network. LiveKit media
+    goes over UDP 50000–50100 (+ TCP 7881 fallback).
 11. **Firebase configured at runtime.** The relay reads the user's
     `google-services.json` and returns its public client values as
     `push_config` in the pair response; the app initialises Firebase with them.
@@ -192,4 +193,13 @@ CI fails if generated code is stale or a fixture doesn't round-trip.
   worker) and talks to the model's realtime WebSocket API directly through a small
   `RealtimeBackend` interface. Fewer dependencies (supply-chain policy) and full control
   of turn-taking, group-call mixing and tools. Details in [voice.md](voice.md).
+- **MCP server without the `mcp` SDK, stdio only** (M5, at the user's request):
+  `agentring mcp` is a small JSON-RPC loop over stdin/stdout (`mcp_server.py`) with
+  the tools `send_message`, `get_replies`, `call` and `status`; no new dependencies,
+  as for the voice side. Streamable HTTP is left out: HTTP-only clients (n8n) use the
+  relay's REST API. Details in [agents.md](agents.md).
+- **`agents.yaml`** (M3): the voice AI's tools come from one file — command agents
+  (consulted with `consult_agent`, argv lists only) and MCP servers with allowlists.
+  A slow agent's answer reaches the call as a note, or the phone as a message once
+  the call is over.
 

@@ -28,6 +28,8 @@ agentring serve --ai --instructions @prompt.md --mcp http://127.0.0.1:8787/mcp
 - `--mcp`: any MCP server over Streamable HTTP; repeat for several. `--tools` keeps only
   the listed tools: over the phone, expose only what the caller should be able to do.
 - `--model` / `--voice`: Gemini Live model (default `gemini-3.8-live`) and voice (default `Charon`).
+- `--agents`: an [`agents.yaml`](agents.md#agentsyaml) with your agents (the AI consults them with
+  `consult_agent`) and MCP servers. Default `~/.agentring/agents.yaml` if it exists; `none` skips it.
 - `call --ai --json` prints the whole result (transcript, tool calls, duration).
 
 ## As a library
@@ -58,7 +60,7 @@ What you can plug in:
 
 | Option | What it does |
 |---|---|
-| `tools` | `Tool(name, description, handler, parameters)`; sync handlers run in a thread, async ones in the loop. `mcp_tools(url, allow=[…])` turns an MCP server into tools. |
+| `tools` | `Tool(name, description, handler, parameters)`; sync handlers run in a thread, async ones in the loop. `mcp_tools(url, allow=[…])` turns an MCP server into tools; `Consultations(load_agents(path).agents).tool()` is `consult_agent` ([agents.md](agents.md)). A tool can find its call with `current_session()` and answer later with `session.notify(text, respond=True)`. |
 | `instructions` | Text, or a function of `CallInfo` (e.g. to add fresh context when the call starts). |
 | `prompts` | `Prompts(...)`: the notes the session gives the model when someone answers, joins or leaves, and the `end_call` description. Change them to change wording or language. |
 | `name_of` | LiveKit identity (`device_<id>`) → the person's name, so the model greets them by name. |
@@ -73,6 +75,10 @@ the call keeps listening while a slow tool works. The call ends when the model
 calls `end_call` (after its goodbye), everyone leaves (10 s grace for a dropped
 connection), the relay says it is over, or the model's session limit is near
 (Gemini: 15 min).
+
+Gemini pricing: the Live models have a free tier (rate-limited; Google may use free-tier
+data to improve its products) and a paid tier of about $0.005/min of audio in and
+$0.018/min out. See https://ai.google.dev/gemini-api/docs/pricing.
 
 ## Backends
 

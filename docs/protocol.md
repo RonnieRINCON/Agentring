@@ -166,7 +166,7 @@ app scans QR
      push_config = the user's Firebase client values (or null): the app initialises
      Firebase at runtime, so one prebuilt APK works with anyone's Firebase project
      relay: token single-use (stored hashed), expires after 10 min
-app stores device_jwt + push_secret (EncryptedSharedPreferences / Keystore)
+app stores device_jwt + push_secret (SecretStore: AES-GCM with an Android Keystore key)
 FirebaseMessagingService.onNewToken → POST /v1/device/fcm { fcm_token }
 ```
 
@@ -305,8 +305,8 @@ compares the session's join time with the phone's latest join.
 - Identities: `agent`, `device_<device_id>`.
 - Token: one room, `canPublish`, `canSubscribe`, `canPublishData`, TTL 120 s
   (join window only; an established session is not affected).
-- Live transcript (M3): the worker publishes LiveKit Agents' standard
-  `lk.transcription` text stream; the app renders it.
+- Live transcript: not implemented yet. The daemon keeps the transcript of AI calls
+  (`agentring call --ai --json`, the MCP `call` tool); the app does not show it.
 
 ## Daemon local HTTP API (M5, sketch)
 

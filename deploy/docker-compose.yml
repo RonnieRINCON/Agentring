@@ -1,30 +1,116 @@
-# agentring all-in-one deployment (M1: relay + TLS).
-# LiveKit (voice) and the optional daemon service are added in milestone 2.
+# agentring all-in-one deployment: relay + LiveKit (calls) + Caddy (automatic TLS),
+# plus the optional daemon under the "daemon" profile.
 #
-#   cp .env.example .env   # set AGENTRING_DOMAIN
-#   docker compose up -d
+#   cp .env.example .env   # set AGENTRING_DOMAIN (and LIVEKIT_NODE_IP if you know it)
+#   docker compose up -d --build
 #   docker compose logs relay | grep -A2 "API key"   # first start only
+#
+# One hostname (docs/architecture.md, decision 10). Caddy terminates TLS and routes:
+#
+#   /rtc*                           -> livekit:7880 (LiveKit signalling, WebSocket)
+#   /twirp/*, /v1/livekit/webhook   -> 404          (LiveKit admin API / internal webhook: never public)
+#   everything else                 -> relay:8080
+#
+# Published on the host: 80 + 443 (Caddy) and LiveKit media, UDP 50000-50100 and
+# TCP 7881 (the range is set in livekit.yaml). Open them in any cloud firewall in
+# front of the server; Docker-published ports bypass ufw.
+#
+# The LiveKit secret never goes through the environment: livekit-init (livekit-init.sh)
+# generates it on first start into two volumes, one per container. The Firebase files
+# are read from ./secrets (see docs/firebase.md).
+#
+# Optional daemon (agentring serve) on the same server:
+#   docker compose run --rm daemon init --relay http://relay:8080 \
+#     --api-key "$(docker compose exec -T relay cat /data/api_key)"
+#   docker compose run --rm daemon pair
+#   docker compose --profile daemon up -d --build
+# Provider keys for `serve --ai` go in the daemon's /config/.env, e.g. from a file:
+#   docker compose run --rm -T --entrypoint sh daemon -c 'cat >> /config/.env' < gemini.env
+#
+# Prebuilt images (from a release) instead of building here: set AGENTRING_RELAY_IMAGE /
+# AGENTRING_DAEMON_IMAGE (e.g. ghcr.io/mutonby/agentring-relay:0.2.0) in .env, then
+# `docker compose pull && docker compose up -d` (no --build).
 
 services:
   relay:
     build: ../relay
+    image: ${AGENTRING_RELAY_IMAGE:-agentring-relay:local}
     restart: unless-stopped
+    depends_on:
+      livekit-init:
+        condition: service_completed_successfully
     environment:
       AGENTRING_PUBLIC_URL: https://${AGENTRING_DOMAIN:?set AGENTRING_DOMAIN in .env}
       AGENTRING_AGENT_NAME: ${AGENTRING_AGENT_NAME:-Agent}
       AGENTRING_API_KEY: ${AGENTRING_API_KEY:-}
       FCM_SERVICE_ACCOUNT_FILE: ${FCM_SERVICE_ACCOUNT_FILE:-}
       FCM_GOOGLE_SERVICES_FILE: ${FCM_GOOGLE_SERVICES_FILE:-}
+      LIVEKIT_URL: wss://${AGENTRING_DOMAIN}
+      LIVEKIT_API_URL: http://livekit:7880
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-agentring}
+      LIVEKIT_API_SECRET_FILE: /livekit/livekit-api-secret
     volumes:
       - relay-data:/data
       - ./secrets:/secrets:ro
+      - relay-livekit:/livekit:ro
     expose:
       - "8080"
+    # Hardening: unprivileged user (from the Dockerfile), nothing writable but /data and /tmp.
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    pids_limit: 256
+
+  livekit:
+    # Pinned by digest (v1.13.10), same as docker-compose.proxy.yml.
+    image: livekit/livekit-server:v1.13.10@sha256:89ca9ce0791e18d6e03bf6e2c49ceb27e1c754eae8bd50c989386c1a5963791a
+    restart: unless-stopped
+    depends_on:
+      livekit-init:
+        condition: service_completed_successfully
+    command: ["--config", "/etc/livekit/livekit.yaml"]
+    environment:
+      # Public IPv4 advertised to phones for media; empty = discovered over STUN.
+      NODE_IP: ${LIVEKIT_NODE_IP:-}
+    volumes:
+      - livekit-config:/etc/livekit:ro
+    expose:
+      - "7880"
+    ports:
+      - "7881:7881/tcp"
+      - "50000-50100:50000-50100/udp"
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    pids_limit: 512
+
+  # Runs once per `up`: generates the LiveKit secret on first start, writes the
+  # LiveKit config. Reuses the Caddy image (it only needs a POSIX shell).
+  livekit-init:
+    image: caddy:2.10.2@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb
+    restart: "no"
+    entrypoint: ["/bin/sh", "/in/livekit-init.sh"]
+    environment:
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-agentring}
+      LIVEKIT_NODE_IP: ${LIVEKIT_NODE_IP:-}
+    volumes:
+      - ./livekit-init.sh:/in/livekit-init.sh:ro
+      - ./livekit.yaml:/in/livekit.yaml:ro
+      - relay-livekit:/out/relay
+      - livekit-config:/out/livekit
+    network_mode: none
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
 
   caddy:
-    image: caddy:2.10
+    image: caddy:2.10.2@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb
     restart: unless-stopped
-    depends_on: [relay]
+    depends_on: [relay, livekit]
     environment:
       AGENTRING_DOMAIN: ${AGENTRING_DOMAIN}
     ports:
@@ -35,7 +121,31 @@ services:
       - caddy-data:/data
       - caddy-config:/config
 
+  # Optional: the agentring daemon on this server (see the top of this file). Its config,
+  # API key and provider keys (/config/.env) live in the daemon-home volume.
+  # Extra `serve` flags: AGENTRING_SERVE_FLAGS in .env, e.g. --ai.
+  daemon:
+    profiles: [daemon]
+    build: ../daemon
+    image: ${AGENTRING_DAEMON_IMAGE:-agentring-daemon:local}
+    restart: unless-stopped
+    depends_on: [relay]
+    command: serve ${AGENTRING_SERVE_FLAGS:-}
+    environment:
+      AGENTRING_HOME: /config
+    volumes:
+      - daemon-home:/config
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    pids_limit: 256
+
 volumes:
   relay-data:
+  relay-livekit:
+  livekit-config:
   caddy-data:
   caddy-config:
+  daemon-home:

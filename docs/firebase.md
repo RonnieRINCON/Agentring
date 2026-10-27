@@ -72,4 +72,4 @@ then `agentring pair` on your computer. The app's Home screen should show
 | Home shows *Push: Unavailable: Google Play services* | The phone has no Google Play services (e.g. some Huawei / de-Googled ROMs). UnifiedPush support is planned. |
 | Home shows *Push: Error …* | Check the phone has internet, then reopen the app. Make sure the relay was restarted after adding the files and that you re-paired. |
 | `agentring status` says `NO push token` | The app never registered: open it once; check the Home screen's Push row. |
-| Pushes arrive late or not at all with the screen off | Battery optimisation: see [troubleshooting-oem.md](troubleshooting-oem.md) (lands with milestone 2). |
+| Pushes arrive late or not at all with the screen off | Battery optimisation: see [troubleshooting-oem.md](troubleshooting-oem.md). |

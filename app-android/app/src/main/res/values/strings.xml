@@ -5,7 +5,7 @@
 
     <!-- Onboarding -->
     <string name="welcome_title">Your agent can call you</string>
-    <string name="welcome_body">agentring lets your AI agent (Claude Code, OpenClaw, n8n, scripts…) send you messages and, soon, call you like a real phone call. Everything goes through your own relay.</string>
+    <string name="welcome_body">agentring lets your AI agent (Claude Code, OpenClaw, n8n, scripts…) send you messages and call you like a real phone call, and lets you call it back. Everything goes through your own relay.</string>
     <string name="get_started">Get started</string>
     <string name="notif_title">Allow notifications</string>
     <string name="notif_body">Messages from your agent arrive as notifications you can reply to directly.</string>
@@ -20,7 +20,7 @@
     <string name="pairing">Pairing…</string>
     <string name="scan_failed">Could not scan: %1$s</string>
     <string name="done_title">Paired with %1$s</string>
-    <string name="done_body">Try it from your computer:\n\nagentring msg "hello"</string>
+    <string name="done_body">Try it from your computer:\n\nagentring msg "hello"\nagentring call "test"</string>
     <string name="done_no_push">Push notifications are not configured on your relay, so messages only arrive while the app is open. See docs/firebase.md.</string>
     <string name="continue_">Continue</string>
 

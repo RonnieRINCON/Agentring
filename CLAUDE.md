@@ -26,9 +26,9 @@ self-hosted, no accounts.
 |---|---|---|
 | **M1** | relay + pairing + messages + push | **Done**; verified on the user's Pixel 6 (Android 16), FCM incl. forced Doze (~1.5 s). |
 | **M2** | phone rings locked / Doze in < 5 s with native call UI; audio (echo/tone is fine) | **In progress**: works on the Pixel 6 (locked + Doze → call screen in 1.6 s, in the room ~0.5 s after answer). Group calls + "join the call" while active (`POST /v1/calls/{id}/join`, Join notification/banner; not yet tested on a real phone). TODO: LiveKit in deploy compose, user's listening test, OK. |
-| M3 | Gemini Live conversation (< 1 s turns), OpenAI Realtime optional; `consult_agent` with `backend: command` | **In progress** (merged in #2): generic `agentring.voice` library (VoiceAgent, pluggable `RealtimeBackend`, Gemini Live, Python/MCP tools, hooks), `call --ai`, `serve --ai` answering the phone; live e2e tests pass (docs/voice.md). TODO: OpenAI Realtime backend, `consult_agent`, transcripts in the store, real-phone test. |
-| M4 | call the agent from the app; missed/declined fallbacks | **In progress**: app side done on branch `m4-call-agent` ("Call agent" → `POST /v1/calls`, joins the room at once, "Calling…" until `call.accept` / agent in the room / poll, cancel while ringing, agent offline / busy / declined / missed messages; not yet tested on a real phone). Agent side (accepting inbound calls) is built separately; missed → `msg.new` fallback still TODO. |
-| M5 | MCP server, skill, examples, docs, < 15 min quickstart with `docker compose up` | |
+| M3 | Gemini Live conversation (< 1 s turns), OpenAI Realtime optional; `consult_agent` with `backend: command` | **In progress** (merged in #2): generic `agentring.voice` library (VoiceAgent, pluggable `RealtimeBackend`, Gemini Live, Python/MCP tools, hooks), `call --ai`, `serve --ai` answering the phone; live e2e tests pass (docs/voice.md). `consult_agent` + `agents.yaml` done (docs/agents.md; slow answers come as a note, or a message after the call). TODO: OpenAI Realtime backend (optional: Gemini has a free tier), transcripts in the store, real-phone test. |
+| M4 | call the agent from the app; missed/declined fallbacks | **In progress**: app side done on branch `m4-call-agent` ("Call agent" → `POST /v1/calls`, joins the room at once, "Calling…" until `call.accept` / agent in the room / poll, cancel while ringing, agent offline / busy / declined / missed messages; not yet tested on a real phone). Agent side: `serve --ai` answers. Missed → `msg.new` fallback done for AI calls (`call --ai`, MCP `call`). |
+| M5 | MCP server, skill, examples, docs, < 15 min quickstart with `docker compose up` | **In progress**: `agentring mcp` (stdio, no SDK), `skills/agentring`, examples (claude-code, n8n), LiveKit + optional daemon in the basic compose, release workflow (signed APK, PyPI, GHCR; docs/release.md), SECURITY/CONTRIBUTING, OEM guide. TODO: OpenClaw example, first tagged release (needs the maintainer's secrets), make the repo public (user: not yet). |
 
 Agreed direction for M3: keep agentring agnostic with two plug points — the
 voice backend (OpenAI Realtime first, as the user's `jefe` uses
@@ -57,14 +57,14 @@ docs/           architecture.md, protocol.md, setup.md, firebase.md
 .github/        workflows/ci.yml (relay+daemon tests, compose smoke), workflows/android.yml (APK + emulator e2e + release)
 ```
 
-Still to create: `skills/agentring/SKILL.md`, `examples/` (claude-code, openclaw,
-n8n), `docs/troubleshooting-oem.md`, daemon Dockerfile/compose profile.
+Still to create: `examples/openclaw`. The release key is not created yet: until the
+first tagged release, every APK (incl. android-preview) is signed with the public debug key.
 
 ## Build and test
 
 ```bash
 cd relay  && npm ci && npm run typecheck && npm test && npm run build   # 35 tests, Node >= 22.13
-cd daemon && uv run pytest -q          # needs relay/dist (e2e against the real relay)
+cd daemon && uv run --extra voice pytest -q   # needs relay/dist (e2e against the real relay)
 cd app-android && ./gradlew :core:test :app:assembleDebug
 cd app-android && ./gradlew -PcoreOnly :core:test   # when Google's Maven is unreachable
 ```
@@ -83,7 +83,7 @@ Local real-phone test: `scripts/device-test.sh [apk]` or `--instrumented`.
   from a persisted event log with a global `seq`; FCM carries only what must wake
   the phone.
 - LiveKit tokens are **not** in `call.invite`; the callee gets them from
-  `POST /v1/calls/{id}/accept` (first accept wins). The caller gets its own in the
+  `POST /v1/calls/{id}/accept` (or `/join`), each phone its own. The caller gets its own in the
   `POST /v1/calls` response.
 - FCM data payloads are signed: `sig = HMAC-SHA256(push_secret, event_json)` plus
   `relay_id`; the app rejects anything else.
@@ -103,7 +103,8 @@ Local real-phone test: `scripts/device-test.sh [apk]` or `--instrumented`.
 - The app accepts `http://` relays only on private/LAN/localhost hosts
   (`RelayUrlPolicy`); everything else must be https.
 - Debug keystore `app-android/app/debug.keystore` is committed on purpose so CI
-  builds install over each other. A real release key is still TODO.
+  builds install over each other. Release builds take the real key from
+  `AGENTRING_KEYSTORE_*` (docs/release.md) and fall back to the debug key locally.
 - M3: `consult_agent` command backend must take an **argv list**, never a shell
   string (the task text comes from the voice model).
 - M2 plan: one hostname, Caddy routes `/v1/*` → relay and `/rtc*`, `/twirp*` → LiveKit.
