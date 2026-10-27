@@ -8,6 +8,7 @@ and returns anything; non-strings are sent to the model as JSON.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import inspect
 import json
 import logging
@@ -18,6 +19,14 @@ from typing import Any
 import httpx
 
 log = logging.getLogger("agentring.voice.tools")
+
+_session: contextvars.ContextVar[Any] = contextvars.ContextVar("agentring_call_session", default=None)
+
+
+def current_session() -> Any:
+    """The CallSession running the current tool (None outside a call). A tool that answers
+    later can keep it and call `session.notify(text, respond=True)` when it is done."""
+    return _session.get()
 
 
 @dataclass

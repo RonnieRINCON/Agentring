@@ -12,12 +12,14 @@ from importlib import import_module
 from typing import Any
 
 _WHERE = {
+    "AgentsConfig": "agents", "CommandAgent": "agents", "ConsultPrompts": "agents", "Consultations": "agents",
+    "load_agents": "agents",
     "RealtimeBackend": "backend", "ToolResult": "backend",
     "GeminiLive": "gemini",
     "accept_incoming": "inbound", "is_incoming_call": "inbound",
     "CallInfo": "session", "CallResult": "session", "CallSession": "session", "Prompts": "session",
     "VoiceAgent": "session",
-    "McpClient": "tools", "Tool": "tools", "ToolCall": "tools", "mcp_tools": "tools",
+    "McpClient": "tools", "Tool": "tools", "ToolCall": "tools", "current_session": "tools", "mcp_tools": "tools",
 }
 __all__ = sorted(_WHERE)
 

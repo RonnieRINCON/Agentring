@@ -284,3 +284,24 @@ def test_is_incoming_call():
     assert not is_incoming_call({**ev, "expires_at": (now - 1) * 1000}, now)
     assert not is_incoming_call({**ev, "direction": "agent_to_user"}, now)
     assert not is_incoming_call({**ev, "type": "call.accept"}, now)
+
+
+def test_consult_agent_through_the_session():
+    import sys
+
+    from agentring.voice import CommandAgent, Consultations
+
+    slow = CommandAgent("ops", "Ops.", [sys.executable, "-c", "import sys, time; time.sleep(0.5); print('ok', sys.argv[1])",
+                                        "{task}"])
+
+    async def run():
+        c = Consultations([slow], answer_within_s=0.1)
+        agent = VoiceAgent(lambda: _NullBackend(), "x", [c.tool()])
+        s = CallSession(agent, CallInfo("call_1", "test"))
+        out = await s.run_tool(ToolCall("1", "consult_agent", {"agent": "ops", "task": "disk"}))
+        await c.drain(5)
+        return out, s._notes.get_nowait()
+
+    out, (note, respond) = asyncio.run(run())
+    assert "working on it" in out
+    assert "ok disk" in note and respond is True

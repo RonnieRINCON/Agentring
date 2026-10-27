@@ -27,7 +27,7 @@ from livekit import rtc
 
 from .backend import (AudioOut, Interrupted, RealtimeBackend, SessionEnding, ToolCalls, ToolResult, TurnComplete,
                       Transcript)
-from .tools import Tool, ToolCall, result_text
+from .tools import Tool, ToolCall, _session, result_text
 
 log = logging.getLogger("agentring.voice")
 
@@ -74,6 +74,7 @@ class CallResult:
     transcript: list[tuple[str, str]] = field(default_factory=list)  # (user|agent, text)
     tools: list[dict[str, Any]] = field(default_factory=list)  # {time, name, args, output, skipped}
     participants: list[str] = field(default_factory=list)  # everyone who was on the call
+    fallback_msg_id: str | None = None  # the message sent instead, if nobody answered (M4)
 
 
 # Called before every tool. Return None to run it, a dict to run it with those args
@@ -347,6 +348,7 @@ class CallSession:
                     call = ToolCall(call.id, call.name, verdict)
                 tool = self.tools[call.name]
                 timeout = tool.timeout_s or self.agent.tool_timeout_s
+                _session.set(self)  # this task's context: the tool (and its thread) can find the call
                 try:
                     output = result_text(await asyncio.wait_for(tool.call(call.args), timeout))
                 except asyncio.TimeoutError:

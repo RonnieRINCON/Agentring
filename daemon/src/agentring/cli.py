@@ -16,7 +16,7 @@ import segno
 import typer
 
 from . import __version__
-from .config import ConfigError, Settings, load_settings, secret, write_settings
+from .config import ConfigError, Settings, home_dir, load_settings, secret, write_settings
 from .relay_client import RelayClient, RelayError
 from .store import Store
 from .sync import FatalSyncError, catch_up, run_ws
@@ -29,6 +29,8 @@ app = typer.Typer(
 )
 devices_app = typer.Typer(help="List or revoke paired phones.", no_args_is_help=False)
 app.add_typer(devices_app, name="devices")
+agents_app = typer.Typer(help="Your agents the voice AI can consult (agents.yaml).", no_args_is_help=False)
+app.add_typer(agents_app, name="agents")
 
 JsonOpt = Annotated[bool, typer.Option("--json", help="Machine-readable JSON output.")]
 AiOpt = Annotated[bool, typer.Option("--ai", help="A voice AI (Gemini Live, needs GEMINI_API_KEY) talks on the call.")]
@@ -38,10 +40,31 @@ InstructionsOpt = Annotated[
 McpOpt = Annotated[Optional[list[str]], typer.Option("--mcp", help="--ai: MCP server URL whose tools the AI may use (repeatable).")]
 ToolsOpt = Annotated[Optional[str], typer.Option("--tools", help="--ai: comma-separated allowlist of MCP tools.")]
 ModelOpt = Annotated[Optional[str], typer.Option("--model", help="--ai: Gemini Live model (default gemini-3.8-live).")]
+AgentsFileOpt = Annotated[
+    Optional[str],
+    typer.Option("--agents", help="--ai: agents.yaml with your agents and MCP servers (default ~/.agentring/agents.yaml "
+                 "if it exists; 'none' to skip it)."),
+]
+
+
+def _agents_config(path: str | None, *, required: bool = False) -> Any:
+    from .voice.agents import AgentsConfigError, load_agents
+
+    if path == "none":
+        return None
+    file = path or str(home_dir() / "agents.yaml")
+    if path is None and not (home_dir() / "agents.yaml").exists():
+        if required:
+            raise _fail(f"no agents configured: create {file} (see docs/agents.md)")
+        return None
+    try:
+        return load_agents(file)
+    except AgentsConfigError as e:
+        raise _fail(str(e)) from None
 
 
 async def _build_ai(instructions: str | None, mcp: list[str] | None, tools: str | None, model: str | None,
-                    voice: str | None) -> tuple[Any, list[Any]]:
+                    voice: str | None, agents_file: str | None = None) -> Any:
     try:
         from .voice.quick import build_agent
     except ImportError:
@@ -50,8 +73,10 @@ async def _build_ai(instructions: str | None, mcp: list[str] | None, tools: str 
     if not key:
         raise _fail("--ai needs GEMINI_API_KEY (environment or ~/.agentring/.env)")
     allow = [t.strip() for t in tools.split(",") if t.strip()] if tools else None
+    agents = _agents_config(agents_file)
     try:
-        return await build_agent(key, instructions=instructions, mcp=mcp, allow=allow, model=model, voice=voice)
+        return await build_agent(key, instructions=instructions, mcp=mcp, allow=allow, agents=agents, model=model,
+                                 voice=voice)
     except OSError as e:
         raise _fail(f"cannot read the instructions: {e}") from None
 
@@ -62,6 +87,8 @@ def _print_result(r: Any) -> None:
     for t in r.tools:
         typer.echo(f"  [tool] {t['name']} {json.dumps(t['args'], ensure_ascii=False)} → {t['output'][:120]}")
     typer.echo(f"Call {r.end_reason}, {r.duration_s} s" if r.answered else f"Call {r.end_reason}")
+    if r.fallback_msg_id:
+        typer.echo(f"Sent the reason as a message instead ({r.fallback_msg_id})")
 
 
 def _signals(stop: asyncio.Event) -> None:
@@ -225,11 +252,15 @@ def call(
     mcp: McpOpt = None,
     tools: ToolsOpt = None,
     model: ModelOpt = None,
+    agents_file: AgentsFileOpt = None,
+    fallback: Annotated[bool, typer.Option("--fallback/--no-fallback",
+                                           help="--ai: if nobody answers, send the reason as a message.")] = True,
     json_out: JsonOpt = False,
 ) -> None:
     """Call the phone. Rings until answered (30 s). With --ai a voice AI talks to you; otherwise the agent greets and echoes you (audio test)."""
     if ai:
-        return _ai_call(reason, urgent, agent_name, instructions, mcp, tools, model, voice, json_out)
+        return _ai_call(reason, urgent, agent_name, instructions, mcp, tools, model, voice, agents_file, fallback,
+                        json_out)
     try:
         from .voice.echo import EchoWorker, synthesize
     except ImportError:
@@ -463,14 +494,16 @@ def devices_list(
 
 
 def _ai_call(reason: str, urgent: bool, agent_name: str | None, instructions: str | None, mcp: list[str] | None,
-             tools: str | None, model: str | None, voice: str | None, json_out: bool) -> None:
+             tools: str | None, model: str | None, voice: str | None, agents_file: str | None, fallback: bool,
+             json_out: bool) -> None:
     from .voice import CallInfo
 
     s = _settings()
     client = _client(s)
 
     async def run() -> Any:
-        agent, mcp_clients = await _build_ai(instructions, mcp, tools, model, voice)
+        built = await _build_ai(instructions, mcp, tools, model, voice, agents_file)
+        agent = built.agent
         try:
             created = await asyncio.to_thread(
                 client.create_call, reason, priority="urgent" if urgent else "normal", agent_name=agent_name
@@ -482,10 +515,25 @@ def _ai_call(reason: str, urgent: bool, agent_name: str | None, instructions: st
         stop = asyncio.Event()
         _signals(stop)
         try:
-            return await agent.run(CallInfo(created["call"]["call_id"], reason), created["join"], relay=client, stop=stop)
+            result = await agent.run(CallInfo(created["call"]["call_id"], reason), created["join"], relay=client, stop=stop)
+            if fallback and not result.answered and not stop.is_set():
+                from .voice.quick import missed_call_message
+
+                try:
+                    result.fallback_msg_id = await asyncio.to_thread(missed_call_message, client, result.call_id, reason)
+                except RelayError as e:
+                    logging.getLogger("agentring").warning("could not send the missed-call message: %s", e)
+            if built.consultations and built.consultations.pending and not stop.is_set():
+                if not json_out:
+                    typer.echo("Waiting for your agents' answers; they will arrive as messages (Ctrl+C to stop)…")
+                stop_wait = asyncio.create_task(stop.wait())
+                drain = asyncio.create_task(built.consultations.drain())
+                await asyncio.wait({stop_wait, drain}, return_when=asyncio.FIRST_COMPLETED)
+                stop_wait.cancel()
+                drain.cancel()
+            return result
         finally:
-            for c in mcp_clients:
-                await c.aclose()
+            await built.aclose()
 
     try:
         result = asyncio.run(run())
@@ -511,6 +559,55 @@ def devices_revoke(device_id: Annotated[str, typer.Argument(help="Device id (dev
     typer.echo(f"Revoked {device_id}")
 
 
+@agents_app.callback(invoke_without_command=True)
+def agents_list(
+    ctx: typer.Context,
+    agents_file: Annotated[Optional[str], typer.Option("--agents", help="agents.yaml (default ~/.agentring/agents.yaml).")] = None,
+    json_out: JsonOpt = False,
+) -> None:
+    """List the agents and MCP servers in agents.yaml (and check the file)."""
+    if ctx.invoked_subcommand is not None:
+        return
+    cfg = _agents_config(agents_file, required=True)
+    if json_out:
+        from dataclasses import asdict
+
+        _emit_json(asdict(cfg))
+        return
+    for a in cfg.agents:
+        where = f"  (in {a.cwd})" if a.cwd else ""
+        typer.echo(f"{a.name}: {a.description}\n  $ {' '.join(a.command)}{where}")
+    for m in cfg.mcp:
+        typer.echo(f"MCP {m.url}" + (f"  tools: {', '.join(m.tools)}" if m.tools is not None else "  (all tools)"))
+    if not cfg.agents and not cfg.mcp:
+        typer.echo("agents.yaml is empty.")
+
+
+@agents_app.command("ask")
+def agents_ask(
+    name: Annotated[str, typer.Argument(help="The agent's name in agents.yaml.")],
+    task: Annotated[str, typer.Argument(help="What to ask it, as the voice AI would.")],
+    agents_file: Annotated[Optional[str], typer.Option("--agents", help="agents.yaml (default ~/.agentring/agents.yaml).")] = None,
+) -> None:
+    """Ask one agent something without a call: checks that consult_agent will work."""
+    cfg = _agents_config(agents_file, required=True)
+    agent = next((a for a in cfg.agents if a.name == name), None)
+    if agent is None:
+        raise _fail(f"no agent {name!r}; agents: {', '.join(a.name for a in cfg.agents) or 'none'}")
+    try:
+        typer.echo(asyncio.run(agent.ask(task)))
+    except (OSError, RuntimeError, TimeoutError) as e:
+        raise _fail(str(e)) from None
+
+
+@app.command()
+def mcp() -> None:
+    """Run as an MCP server over stdio, for agents: `claude mcp add agentring -- agentring mcp`."""
+    from .mcp_server import run_stdio
+
+    run_stdio(_settings())
+
+
 def _describe(event: dict[str, Any]) -> str | None:
     t = event.get("type")
     if t == "msg.new":
@@ -531,6 +628,7 @@ def serve(
     tools: ToolsOpt = None,
     model: ModelOpt = None,
     voice: Annotated[Optional[str], typer.Option("--voice", help="--ai: the model's voice (e.g. Charon).")] = None,
+    agents_file: AgentsFileOpt = None,
 ) -> None:
     """Run the daemon: keeps a live connection to the relay. With --ai, answers the phone's calls with a voice AI."""
     s = _settings()
@@ -571,17 +669,18 @@ def serve(
         nonlocal voice_agent
         stop = asyncio.Event()
         _signals(stop)
-        mcp_clients: list[Any] = []
+        built: Any = None
         if ai:
-            voice_agent, mcp_clients = await _build_ai(instructions, mcp, tools, model, voice)
+            built = await _build_ai(instructions, mcp, tools, model, voice, agents_file)
+            voice_agent = built.agent
             log.info("answering calls with %d tools", len(voice_agent.tools))
         log.info("agentring %s serving; relay %s", __version__, s.relay_url)
         try:
             await run_ws(client, s.api_key, store, lambda e: on_event(e, stop), stop=stop)
             await asyncio.gather(*calls, return_exceptions=True)
         finally:
-            for c in mcp_clients:
-                await c.aclose()
+            if built is not None:
+                await built.aclose()
 
     try:
         asyncio.run(main())
