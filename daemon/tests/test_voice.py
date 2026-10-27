@@ -201,8 +201,16 @@ def test_tools_run_and_report_errors():
     assert json.loads(out[1]) == {"answer": "HI"}
     assert out[2].startswith("Still running after 0 s")
     assert out[3].startswith("Error: division by zero")
-    assert out[4] == "No such tool: nope"
+    assert out[4].startswith("No such tool: nope. Available tools: add")
     assert [t["name"] for t in s.tool_log] == ["add", "adeep", "slow", "fail", "nope"]
+
+
+def test_unknown_tool_suggests_the_closest_name():
+    # A voice model asked for "vulnerabilities" when the tool is "vulnerabilidades" and then gave up.
+    async def run():
+        return await _session().run_tool(ToolCall("1", "adds", {}))
+
+    assert asyncio.run(run()) == "No such tool: adds. Did you mean add? Call it again with that exact name."
 
 
 def test_before_tool_can_block_or_rewrite():

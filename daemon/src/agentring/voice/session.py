@@ -14,6 +14,7 @@ transcript — is passed in; nothing here knows who is calling or why.
 from __future__ import annotations
 
 import asyncio
+import difflib
 import inspect
 import logging
 import time
@@ -333,7 +334,10 @@ class CallSession:
             self.hang_up()
             output = "Hanging up. If you already said goodbye, say nothing more."
         elif call.name not in self.tools:
-            output = f"No such tool: {call.name}"
+            # Voice models sometimes translate or misspell a tool name; point them at the right one so they retry.
+            close = difflib.get_close_matches(call.name, list(self.tools), n=1, cutoff=0.5)
+            output = (f"No such tool: {call.name}. " + (f"Did you mean {close[0]}? Call it again with that exact name."
+                      if close else f"Available tools: {', '.join(self.tools)}."))
         else:
             verdict = await _maybe_await(self.agent.before_tool(self, call)) if self.agent.before_tool else None
             if isinstance(verdict, str):
