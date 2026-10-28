@@ -27,6 +27,10 @@ The second form is the usual `mcpServers` config that most clients read. It uses
 the daemon's config (`agentring init`), so run `agentring init` and
 `agentring pair` first. Other harnesses: see [recipes](#recipes-by-harness).
 
+`agentring mcp --agent-name "Claude Code"` sets the caller name the phone shows (useful
+when several agents share one relay), and `--device dev_…` (repeatable) rings only those
+phones instead of every paired one.
+
 `call` blocks until the call ends, and `get_replies` up to `wait_s`: raise the
 client's MCP tool timeout if it has a short one (Codex: 60 s, opencode: 30 s).
 

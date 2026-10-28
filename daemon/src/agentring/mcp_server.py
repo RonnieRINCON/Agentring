@@ -78,8 +78,11 @@ class ToolError(Exception):
 
 
 class AgentringTools:
-    def __init__(self, settings: Settings, *, poll_s: float = 2.0):
+    def __init__(self, settings: Settings, *, poll_s: float = 2.0, agent_name: str | None = None,
+                 device_ids: list[str] | None = None):
         self.s = settings
+        self.agent_name = agent_name  # caller name on the phone; None = the relay's
+        self.device_ids = device_ids  # ring only these phones; None = every paired phone
         self.client = RelayClient(settings.relay_url, settings.api_key)
         self.store = Store(settings.db_path)
         self.poll_s = poll_s
@@ -147,7 +150,8 @@ class AgentringTools:
             built = await build_agent(key, instructions=instructions, agents=agents)
             try:
                 created = await asyncio.to_thread(self.client.create_call, reason,
-                                                  priority="urgent" if urgent else "normal")
+                                                  priority="urgent" if urgent else "normal",
+                                                  agent_name=self.agent_name, device_ids=self.device_ids)
                 r = await built.agent.run(CallInfo(created["call"]["call_id"], reason), created["join"],
                                           relay=self.client)
             finally:
@@ -270,9 +274,9 @@ def _tool_error(text: str) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": text}], "isError": True}
 
 
-def run_stdio(settings: Settings) -> None:
+def run_stdio(settings: Settings, *, agent_name: str | None = None, device_ids: list[str] | None = None) -> None:
     async def main() -> None:
-        tools = AgentringTools(settings)
+        tools = AgentringTools(settings, agent_name=agent_name, device_ids=device_ids)
         out = sys.stdout
 
         def write(line: str) -> None:

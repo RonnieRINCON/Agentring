@@ -603,11 +603,14 @@ def agents_ask(
 
 
 @app.command()
-def mcp() -> None:
+def mcp(
+    agent_name: Annotated[Optional[str], typer.Option("--agent-name", help="Caller name the phone shows for this agent's calls.")] = None,
+    device: Annotated[Optional[list[str]], typer.Option("--device", help="Ring only this phone (device id); repeat for several.")] = None,
+) -> None:
     """Run as an MCP server over stdio, for agents: `claude mcp add agentring -- agentring mcp`."""
     from .mcp_server import run_stdio
 
-    run_stdio(_settings())
+    run_stdio(_settings(), agent_name=agent_name, device_ids=device or None)
 
 
 def _describe(event: dict[str, Any]) -> str | None:

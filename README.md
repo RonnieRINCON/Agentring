@@ -12,7 +12,10 @@ over VoIP from your own server to your own phone.
 [![Android](https://github.com/mutonby/agentring/actions/workflows/android.yml/badge.svg)](https://github.com/mutonby/agentring/actions/workflows/android.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-<!-- demo: phone locked → rings → voice AI explains → answer → agent continues -->
+![A migration fails in Claude Code, it calls a locked Android phone over agentring, the voice AI explains the problem, the user says what to do, and Claude Code carries on](docs/media/demo.gif)
+
+*A real run with Claude Code, a Pixel 6 and the voice AI. The phone is a screen recording, the terminal
+is redrawn from Claude Code's output, and only the waits were cut.*
 
 > **Pre-release.** Messages, calls on a locked phone, the voice AI, calling your agent
 > from the app and the MCP server all work. So far it has been tested on one phone
