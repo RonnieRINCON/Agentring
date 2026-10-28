@@ -171,3 +171,22 @@ def test_missed_call_message():
     r = Relay()
     assert missed_call_message(r, "call_1", "Deploy blocked", "Need OK for the migration.") == "msg_1"
     assert r.sent == ("Missed call: Deploy blocked\n\nNeed OK for the migration.", "call_1")
+
+
+def test_cli_agents_ask_reads_the_group_agents_option(tmp_path):
+    from typer.testing import CliRunner
+
+    from agentring.cli import app
+
+    f = tmp_path / "agents.yaml"
+    f.write_text(f"""
+agents:
+  echo:
+    description: Echoes the task.
+    command: [{PY}, -c, "import sys; print('got ' + sys.argv[1])", "{{task}}"]
+""")
+    for args in (["agents", "--agents", str(f), "ask", "echo", "hi"],
+                 ["agents", "ask", "--agents", str(f), "echo", "hi"]):
+        r = CliRunner().invoke(app, args)
+        assert r.exit_code == 0, r.output
+        assert r.output.strip() == "got hi"

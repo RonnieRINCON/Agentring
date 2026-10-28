@@ -56,7 +56,7 @@ agentring msg "hola"
 echo GEMINI_API_KEY=... >> ~/.agentring/.env
 agentring call "Testing agentring" --ai
 
-# your agent
+# your agent (Claude Code here; Codex, opencode, OpenClaw, Hermes: docs/agents.md)
 claude mcp add agentring -- agentring mcp
 ```
 

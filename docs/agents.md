@@ -25,7 +25,10 @@ claude mcp add agentring -- agentring mcp          # Claude Code
 
 The second form is the usual `mcpServers` config that most clients read. It uses
 the daemon's config (`agentring init`), so run `agentring init` and
-`agentring pair` first.
+`agentring pair` first. Other harnesses: see [recipes](#recipes-by-harness).
+
+`call` blocks until the call ends, and `get_replies` up to `wait_s`: raise the
+client's MCP tool timeout if it has a short one (Codex: 60 s, opencode: 30 s).
 
 | Tool | What it does |
 |---|---|
@@ -51,7 +54,7 @@ during a call:
 agents:
   claude:
     description: Claude Code in my web app's repo. Code questions, CI status, deploys.
-    command: [claude, -p, "{task}"]
+    command: [claude, -p, --permission-mode, plan, --, "{task}"]
     cwd: ~/code/webapp
     timeout_s: 600          # hard limit; the process is killed after it (default 600)
   ops:
@@ -70,7 +73,10 @@ mcp:                         # MCP servers over Streamable HTTP; their tools go 
   replaced inside the argument that contains it, and if no argument has it, the
   task goes to stdin. The agent's stdout is the answer. A non-zero exit is an
   error, with the end of stderr.
+- Don't let the task be read as an option: put `--` before `{task}`, or text before
+  it in the same argument (`"Task: {task}"`).
 - The agent runs with your environment plus `env` and `AGENTRING_CALL_ID`, in `cwd`.
+  The call id lets an agent keep one session per call (see [OpenClaw](#openclaw)).
 - **`description` matters**: the voice AI picks the agent by it.
 - Over the phone, expose only what the caller should be able to do: use
   allowlists, and agents whose permissions you'd accept from someone holding your
@@ -103,6 +109,93 @@ From Python, `Consultations(agents, answer_within_s=…, prompts=ConsultPrompts(
 builds the tool (`.tool()`) for a `VoiceAgent`. Any tool of your own can do the same
 "answer later" trick: `current_session()` returns the call, and
 `session.notify(text, respond=True)` speaks up when you are done.
+
+## Recipes by harness
+
+agentring doesn't care which harness you use: anything that speaks MCP can reach
+you, and anything you can run as a command can be consulted from a call.
+
+### Your agent reaches you (MCP)
+
+| Harness | Setup |
+|---|---|
+| Claude Code | `claude mcp add agentring -- agentring mcp` |
+| Codex | `codex mcp add agentring -- agentring mcp`, then `tool_timeout_sec = 1800` under `[mcp_servers.agentring]` in `~/.codex/config.toml` |
+| opencode | `opencode.json`: `"mcp": {"agentring": {"type": "local", "command": ["agentring", "mcp"], "timeout": 1800000}}` |
+| OpenClaw | `openclaw mcp set agentring '{"command":"agentring","args":["mcp"]}'` |
+| Hermes | `~/.hermes/config.yaml`: `mcp_servers: {agentring: {command: agentring, args: [mcp], timeout: 1800}}` |
+| Anything else | the `mcpServers` JSON above, the `agentring` CLI, or the [REST API](#rest-api-n8n-scripts) |
+
+Add [`skills/agentring`](../skills/agentring) where the harness reads skills, so the
+agent knows when to message and when to call.
+
+### You consult your agent from a call (`agents.yaml`)
+
+```yaml
+agents:
+  claude:
+    description: Claude Code in my web app's repo. Code questions, CI status.
+    command: [claude, -p, --permission-mode, plan, --, "{task}"]
+    cwd: ~/code/webapp
+  codex:
+    description: Codex in my web app's repo. Code questions, CI status.
+    command: [codex, exec, --sandbox, read-only, --ephemeral, --, "{task}"]
+    cwd: ~/code/webapp
+  opencode:
+    description: opencode in my web app's repo.
+    command: [opencode, run, "Task: {task}"]
+    cwd: ~/code/webapp
+  hermes:
+    description: My Hermes agent. Email, calendar, research.
+    command: [hermes, -z, "Task: {task}"]
+  openclaw:
+    description: My OpenClaw assistant. Messages, calendar, home.
+    command: [sh, -c, 'exec openclaw agent --agent main --session-id "agentring-${AGENTRING_CALL_ID:-test}" --message="$1"', sh, "{task}"]
+```
+
+Keep only the ones you use, and check each with `agentring agents ask <name> "…"`.
+They start read-only or with the harness's own approval rules. Widen them on
+purpose, knowing the voice AI acts on what it hears:
+
+- **Claude Code**: `plan` can look but not change anything. To let it act, use
+  `--permission-mode acceptEdits` with a narrow `--allowedTools` list.
+- **Codex**: `--sandbox workspace-write` lets it edit files under `cwd`. Add
+  `--skip-git-repo-check` if `cwd` is not a git repo.
+- **opencode**: uses its permission config; don't add `--auto` (approves
+  everything). With `opencode serve` running, `--attach http://localhost:4096`
+  skips the start-up cost.
+- **Hermes**: `-z` prints only the final answer. Don't add `--yolo` for the phone.
+
+#### OpenClaw
+
+`openclaw agent` runs one turn through your running gateway. The `sh -c` script is
+fixed text: the task arrives as `$1` and is never parsed by the shell. The call id
+gives each call its own OpenClaw session, so a second question on the same call
+keeps the context of the first.
+
+### Agents behind an HTTP API
+
+For an agent that only runs as a server (an OpenAI-compatible endpoint such as the
+OpenClaw gateway's or Hermes' API server, a webhook, your own service), point
+`command` at a small script that reads the task on stdin and prints the answer:
+
+```sh
+#!/bin/bash
+# ~/bin/ask-agent: task on stdin, answer on stdout. Set AGENT_URL, AGENT_MODEL, AGENT_KEY.
+set -euo pipefail
+jq -Rs --arg m "$AGENT_MODEL" --arg u "agentring-${AGENTRING_CALL_ID:-test}" \
+  '{model: $m, user: $u, messages: [{role: "user", content: .}]}' \
+| curl -sf "$AGENT_URL/v1/chat/completions" -H "Authorization: Bearer $AGENT_KEY" \
+    -H 'content-type: application/json' -d @- \
+| jq -er '.choices[0].message.content'
+```
+
+```yaml
+  myagent:
+    description: ...
+    command: [~/bin/ask-agent]          # no "{task}": it goes to stdin
+    env: {AGENT_URL: "http://127.0.0.1:8642", AGENT_MODEL: "...", AGENT_KEY: "..."}   # what your server expects
+```
 
 ## REST API (n8n, scripts)
 

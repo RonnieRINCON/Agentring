@@ -6,7 +6,7 @@ description: Reach the user on their phone through agentring — send a message,
 # agentring
 
 agentring rings and messages the user's own phone. The tools come from the
-`agentring` MCP server (`claude mcp add agentring -- agentring mcp`).
+`agentring` MCP server (`agentring mcp`; setup for each harness in docs/agents.md).
 
 ## Pick the lightest channel
 

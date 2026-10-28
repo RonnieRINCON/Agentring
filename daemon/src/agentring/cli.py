@@ -567,6 +567,7 @@ def agents_list(
 ) -> None:
     """List the agents and MCP servers in agents.yaml (and check the file)."""
     if ctx.invoked_subcommand is not None:
+        ctx.obj = agents_file  # `agentring agents --agents X ask ...`
         return
     cfg = _agents_config(agents_file, required=True)
     if json_out:
@@ -585,12 +586,13 @@ def agents_list(
 
 @agents_app.command("ask")
 def agents_ask(
+    ctx: typer.Context,
     name: Annotated[str, typer.Argument(help="The agent's name in agents.yaml.")],
     task: Annotated[str, typer.Argument(help="What to ask it, as the voice AI would.")],
     agents_file: Annotated[Optional[str], typer.Option("--agents", help="agents.yaml (default ~/.agentring/agents.yaml).")] = None,
 ) -> None:
     """Ask one agent something without a call: checks that consult_agent will work."""
-    cfg = _agents_config(agents_file, required=True)
+    cfg = _agents_config(agents_file or ctx.obj, required=True)
     agent = next((a for a in cfg.agents if a.name == name), None)
     if agent is None:
         raise _fail(f"no agent {name!r}; agents: {', '.join(a.name for a in cfg.agents) or 'none'}")

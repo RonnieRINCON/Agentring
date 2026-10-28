@@ -43,7 +43,7 @@ add a `Stop` hook to `~/.claude/settings.json`:
 agents:
   claude:
     description: Claude Code in my web app's repo. Code questions, CI status, small fixes.
-    command: [claude, -p, "{task}", --permission-mode, plan]   # read-only: it can look, not change
+    command: [claude, -p, --permission-mode, plan, --, "{task}"]   # read-only: it can look, not change
     cwd: ~/code/webapp
     timeout_s: 600
 ```
