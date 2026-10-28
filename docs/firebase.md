@@ -5,8 +5,9 @@ data messages. You use **your own** free Firebase project: nothing goes through
 anyone else's servers, and the prebuilt APK works with it without rebuilding —
 the relay hands the app the (public) client settings when you pair.
 
-Without Firebase everything still works while the app is open (it keeps a
-WebSocket to the relay), but a closed app won't notice new messages.
+Without Firebase everything still works while the app is open on screen (it keeps a
+WebSocket to the relay), but a locked phone or a closed app won't notice new messages
+or **ring for calls**. So for calls, it is not optional.
 
 Time: ~5 minutes. Cost: free (FCM has no usage charges).
 

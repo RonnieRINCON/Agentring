@@ -78,17 +78,21 @@ More: [architecture](docs/architecture.md) · [protocol](docs/protocol.md) ·
 ## Quickstart
 
 You need:
-- a Linux server with Docker and a domain name,
-- a free Firebase project for push ([docs/firebase.md](docs/firebase.md)),
+- somewhere to run the relay: a Linux server with Docker and a domain name, **or** your own
+  computer with Docker (the phone on the same Wi-Fi, or anywhere over Tailscale),
+- a free Firebase project, which is what makes a locked phone ring ([docs/firebase.md](docs/firebase.md)),
 - a Gemini API key for the voice AI ([free tier](https://aistudio.google.com/apikey)),
 - an Android phone.
 
 ```bash
-# 1. Server: open ports 80, 443, UDP 50000-50100 and TCP 7881
+# 1. The relay, on a server with a domain (ports 80, 443, UDP 50000-50100 and TCP 7881 open)
 cd deploy && cp .env.example .env && $EDITOR .env && docker compose up -d --build
-docker compose logs relay | grep -A2 "API key"
+#    ... or on your own computer, at its LAN or Tailscale IP
+cd deploy && cp .env.local.example .env.local && $EDITOR .env.local \
+  && docker compose -f docker-compose.local.yml --env-file .env.local up -d --build
+docker compose logs relay | grep -A2 "API key"   # add the same -f/--env-file for the local one
 
-# 2. Your computer
+# 2. The computer where your agent runs
 uv tool install './daemon[voice]'
 agentring init --relay https://relay.example.com --api-key ak_...
 agentring pair                         # scan the QR code with the app
@@ -100,11 +104,10 @@ agentring call "Testing agentring" --ai
 claude mcp add agentring -- agentring mcp
 ```
 
-Get the app from [Releases](https://github.com/mutonby/agentring/releases). Step by
-step, including a LAN-only setup for testing: **[docs/setup.md](docs/setup.md)**.
-
-If the phone doesn't ring when locked, it's usually the vendor's battery saver:
-[docs/troubleshooting-oem.md](docs/troubleshooting-oem.md).
+Get the app from [Releases](https://github.com/mutonby/agentring/releases). The full
+tutorial, step by step for both options and with a troubleshooting table:
+**[docs/setup.md](docs/setup.md)**. If the phone doesn't ring when locked, it's usually the
+vendor's battery saver: [docs/troubleshooting-oem.md](docs/troubleshooting-oem.md).
 
 ## Privacy and security
 

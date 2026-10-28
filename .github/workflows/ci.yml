@@ -38,6 +38,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: The other compose files parse
+        working-directory: deploy
+        run: |
+          docker compose -f docker-compose.local.yml --env-file .env.local.example config -q
+          AGENTRING_DOMAIN=relay.example.com LIVEKIT_NODE_IP=203.0.113.1 LIVEKIT_API_KEY=lk_x \
+            docker compose -f docker-compose.proxy.yml config -q
       - name: Build and start
         working-directory: deploy
         run: |

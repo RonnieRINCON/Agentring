@@ -1,0 +1,92 @@
+# agentring on your own computer: relay + LiveKit, no domain, no TLS. For trying it out
+# at home, or for good over Tailscale. The phone must reach this computer: same Wi-Fi
+# (LAN IP) or the same tailnet (Tailscale IP, 100.x).
+#
+#   cp .env.local.example .env.local   # set AGENTRING_HOST_IP
+#   docker compose -f docker-compose.local.yml --env-file .env.local up -d --build
+#   docker compose -f docker-compose.local.yml logs relay | grep -A2 "API key"   # first start only
+#
+# Plain HTTP is accepted because AGENTRING_HOST_IP is a private address: the app only
+# talks http:// to private, LAN and Tailscale hosts. Everything is published on that one
+# address only (not on 0.0.0.0): the relay on 8080, LiveKit signalling on 7880, media on
+# TCP 7881 and UDP 50000-50100. Allow those in the computer's firewall if it asks.
+#
+# Same images, LiveKit secret handling (livekit-init.sh) and hardening as
+# docker-compose.yml; the Firebase files are read from ./secrets (docs/firebase.md).
+
+services:
+  relay:
+    build: ../relay
+    image: ${AGENTRING_RELAY_IMAGE:-agentring-relay:local}
+    restart: unless-stopped
+    depends_on:
+      livekit-init:
+        condition: service_completed_successfully
+    environment:
+      AGENTRING_PUBLIC_URL: http://${AGENTRING_HOST_IP:?set AGENTRING_HOST_IP in .env.local}:8080
+      AGENTRING_INSECURE_DEV: "1"
+      AGENTRING_AGENT_NAME: ${AGENTRING_AGENT_NAME:-Agent}
+      AGENTRING_API_KEY: ${AGENTRING_API_KEY:-}
+      FCM_SERVICE_ACCOUNT_FILE: ${FCM_SERVICE_ACCOUNT_FILE:-}
+      FCM_GOOGLE_SERVICES_FILE: ${FCM_GOOGLE_SERVICES_FILE:-}
+      LIVEKIT_URL: ws://${AGENTRING_HOST_IP}:7880
+      LIVEKIT_API_URL: http://livekit:7880
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-agentring}
+      LIVEKIT_API_SECRET_FILE: /livekit/livekit-api-secret
+    volumes:
+      - relay-data:/data
+      - ./secrets:/secrets:ro
+      - relay-livekit:/livekit:ro
+    ports:
+      - "${AGENTRING_HOST_IP}:8080:8080"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    pids_limit: 256
+
+  livekit:
+    image: livekit/livekit-server:v1.13.10@sha256:89ca9ce0791e18d6e03bf6e2c49ceb27e1c754eae8bd50c989386c1a5963791a
+    restart: unless-stopped
+    depends_on:
+      livekit-init:
+        condition: service_completed_successfully
+    command: ["--config", "/etc/livekit/livekit.yaml"]
+    environment:
+      # The address the phone uses for call audio: this computer's LAN or Tailscale IP.
+      NODE_IP: ${AGENTRING_HOST_IP}
+    volumes:
+      - livekit-config:/etc/livekit:ro
+    ports:
+      - "${AGENTRING_HOST_IP}:7880:7880/tcp"
+      - "${AGENTRING_HOST_IP}:7881:7881/tcp"
+      - "${AGENTRING_HOST_IP}:50000-50100:50000-50100/udp"
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    pids_limit: 512
+
+  livekit-init:
+    image: caddy:2.10.2@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb
+    restart: "no"
+    entrypoint: ["/bin/sh", "/in/livekit-init.sh"]
+    environment:
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-agentring}
+      LIVEKIT_NODE_IP: ${AGENTRING_HOST_IP}
+    volumes:
+      - ./livekit-init.sh:/in/livekit-init.sh:ro
+      - ./livekit.yaml:/in/livekit.yaml:ro
+      - relay-livekit:/out/relay
+      - livekit-config:/out/livekit
+    network_mode: none
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  relay-data:
+  relay-livekit:
+  livekit-config:

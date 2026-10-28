@@ -52,7 +52,8 @@ relay/          TypeScript, Fastify 5, node:sqlite (no native deps), jose; FCM H
 daemon/         Python ≥3.11 + uv; `agentring` CLI (typer), local SQLite mirror synced from the relay
 app-android/    :core = pure Kotlin/JVM (protocol models, PushVerifier, RelayApi, RelaySocket)
                 :app  = Compose/Material 3 app, package dev.agentring.app, minSdk 26, targetSdk 35
-deploy/         docker-compose.yml (caddy + relay; LiveKit to be added in M2), Caddyfile, .env.example
+deploy/         docker-compose.yml (caddy + relay + LiveKit), docker-compose.local.yml (own computer, LAN/Tailscale, no TLS),
+                docker-compose.proxy.yml (behind an existing proxy), Caddyfile, .env.example, .env.local.example
 scripts/        ci-emulator-e2e.sh, device-test.sh
 docs/           architecture.md, protocol.md, setup.md, firebase.md
 .github/        workflows/ci.yml (relay+daemon tests, compose smoke), workflows/android.yml (APK + emulator e2e + release)

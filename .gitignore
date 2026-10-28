@@ -24,5 +24,6 @@ uv.lock.bak
 *.key
 .env.*
 !.env.example
+!.env.local.example
 service-account*.json
 *-firebase-adminsdk-*.json
