@@ -258,10 +258,16 @@ jobs:
       OWNER: ${{ github.repository_owner }}
       ON_PYPI: ${{ needs.pypi.result == 'success' }}
     steps:
+      # Only what the release ships: the run also holds Docker's build records
+      # (*.dockerbuild), which download-artifact cannot fetch.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          name: apk
           path: assets/
-          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: python-dist
+          path: assets/
       - name: Checksums
         working-directory: assets
         run: |
