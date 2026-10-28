@@ -1,33 +1,38 @@
 # Weekly, grouped updates. `cooldown` skips releases younger than 14 days, the same
 # age rule we follow by hand (CONTRIBUTING.md). Check the lockfiles against
-# OSV before merging.
+# OSV before merging. Major versions are bumped by hand (security updates still come).
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule: {interval: weekly}
     cooldown: {default-days: 14}
+    ignore: [{dependency-name: "*", update-types: ["version-update:semver-major"]}]
     groups: {actions: {patterns: ["*"]}}
 
   - package-ecosystem: npm
     directory: /relay
     schedule: {interval: weekly}
     cooldown: {default-days: 14}
+    ignore: [{dependency-name: "*", update-types: ["version-update:semver-major"]}]
     groups: {relay: {patterns: ["*"]}}
 
   - package-ecosystem: uv
     directory: /daemon
     schedule: {interval: weekly}
     cooldown: {default-days: 14}
+    ignore: [{dependency-name: "*", update-types: ["version-update:semver-major"]}]
     groups: {daemon: {patterns: ["*"]}}
 
   - package-ecosystem: gradle
     directory: /app-android
     schedule: {interval: weekly}
     cooldown: {default-days: 14}
+    ignore: [{dependency-name: "*", update-types: ["version-update:semver-major"]}]
     groups: {android: {patterns: ["*"]}}
 
   - package-ecosystem: docker-compose
     directory: /deploy
     schedule: {interval: weekly}
     cooldown: {default-days: 14}
+    ignore: [{dependency-name: "*", update-types: ["version-update:semver-major"]}]
