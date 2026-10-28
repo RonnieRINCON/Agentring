@@ -81,6 +81,10 @@ that the APK is not signed with the debug certificate.
 No PyPI token is stored anywhere: PyPI trusts this repository's workflow through
 OpenID Connect.
 
+The `pypi` job only runs when the repository variable `AGENTRING_PUBLISH_PYPI` is `true`
+(`gh variable set AGENTRING_PUBLISH_PYPI --body true`). Until then a release skips PyPI,
+attaches the wheel to the GitHub release and its notes say how to install from it.
+
 1. On [pypi.org](https://pypi.org) → your account → **Publishing** → *Add a new
    pending publisher* (the project doesn't exist yet; once it does, use the project's
    own Publishing page):

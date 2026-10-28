@@ -1,6 +1,6 @@
 [project]
 name = "agentring"
-version = "0.2.0.dev0"
+version = "0.2.0"
 description = "Let any AI agent call your phone over VoIP and message you (daemon + CLI)"
 readme = "README.md"
 license = "Apache-2.0"

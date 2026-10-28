@@ -3,7 +3,7 @@ import { type Ctx, principal, requireAuth } from "../context.js";
 import type { Schemas } from "../protocol.js";
 import { callFromRow, canSee } from "./calls.js";
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.2.0";
 
 export function systemRoutes(app: FastifyInstance, ctx: Ctx): void {
   const auth = requireAuth(ctx, "agent", "device");

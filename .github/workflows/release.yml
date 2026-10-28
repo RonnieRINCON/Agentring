@@ -223,6 +223,9 @@ jobs:
   pypi:
     name: Publish to PyPI
     needs: [meta, android, python, images]
+    # Off until trusted publishing is set up on pypi.org (docs/release.md, step 3):
+    # then set the repository variable AGENTRING_PUBLISH_PYPI=true.
+    if: vars.AGENTRING_PUBLISH_PYPI == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:
@@ -240,6 +243,11 @@ jobs:
   github-release:
     name: GitHub release
     needs: [meta, android, python, images, pypi]
+    # Every build must have succeeded; PyPI may have been skipped (see the pypi job).
+    if: >-
+      !cancelled() && needs.meta.result == 'success' && needs.android.result == 'success' &&
+      needs.python.result == 'success' && needs.images.result == 'success' &&
+      (needs.pypi.result == 'success' || needs.pypi.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -248,6 +256,7 @@ jobs:
       VERSION: ${{ needs.meta.outputs.version }}
       PRERELEASE: ${{ needs.meta.outputs.prerelease }}
       OWNER: ${{ github.repository_owner }}
+      ON_PYPI: ${{ needs.pypi.result == 'success' }}
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -265,13 +274,18 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           owner=${OWNER,,}
+          if [[ "$ON_PYPI" == true ]]; then
+            daemon="\`uv tool install 'agentring[voice]==$VERSION'\` (or \`pipx install 'agentring[voice]==$VERSION'\`)."
+          else
+            daemon="download \`agentring-$VERSION-py3-none-any.whl\` below, then \`uv tool install './agentring-$VERSION-py3-none-any.whl[voice]'\`."
+          fi
           cat > notes.md <<EOF
           ## Install
 
           - **Android**: \`agentring-$VERSION.apk\` below (allow installs from unknown sources).
             Signed with the agentring release key: it does not install over the debug-signed
             \`android-preview\` build; uninstall that one first.
-          - **Daemon / CLI**: \`uv tool install agentring==$VERSION\` (or \`pipx install agentring==$VERSION\`).
+          - **Daemon / CLI**: $daemon
           - **Relay**: \`ghcr.io/$owner/agentring-relay:$VERSION\`
           - **Daemon image**: \`ghcr.io/$owner/agentring-daemon:$VERSION\`
 
