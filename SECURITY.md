@@ -14,9 +14,12 @@ the issue before disclosing it.
 
 ## Supported versions
 
-Only the latest release (and the default branch) gets security fixes. The
-Android app is currently published as the `android-preview` pre-release, which
-is rebuilt from the default branch.
+Only the latest release (and the default branch) gets security fixes. Release
+APKs (`agentring-X.Y.Z.apk`) are signed with the agentring release key, SHA-256
+certificate fingerprint
+`afa35da7bed28a94b62693f7b4c184646b45c7855a51c3f8809283ae96889e3c`. The
+`android-preview` pre-release is a test build of the default branch signed with
+the public debug key (see below).
 
 ## Threat model
 
