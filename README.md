@@ -1,77 +1,124 @@
 # agentring
 
-Let any AI agent (Claude Code, OpenClaw, n8n, scripts…) **call your phone over VoIP**
-and message you, and call your agents back. Your phone rings like a real call, even
-locked. A voice AI does the talking and can ask your agents for help mid-call.
-No phone network, no numbers, no Twilio. Self-hosted, open source.
+**Your AI agent can call you.** When it needs a decision, hits a wall or finishes a
+long job, your phone rings like a real call, even locked and in Doze. A voice AI tells
+you what's going on, you talk it through, and the agent gets the transcript and carries
+on. You can also call your agents back from the app and ask them things by voice.
 
-> **Status: pre-release.** Messages, calls (locked phone, Doze), voice AI with
-> Gemini Live, calling the agent from the app, and the MCP server all work; they have
-> been tested on one phone (Pixel 6, Android 16). Android only.
+Self-hosted and open source. No phone numbers, no Twilio, no per-minute fees: calls go
+over VoIP from your own server to your own phone.
 
-## What you can do
+[![CI](https://github.com/mutonby/agentring/actions/workflows/ci.yml/badge.svg)](https://github.com/mutonby/agentring/actions/workflows/ci.yml)
+[![Android](https://github.com/mutonby/agentring/actions/workflows/android.yml/badge.svg)](https://github.com/mutonby/agentring/actions/workflows/android.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-- **Your agent reaches you**: `send_message`, `get_replies`, or `call`. On a call, a
-  voice AI explains why the agent is calling, talks with you, and returns the
-  transcript to the agent. Use it over MCP (`agentring mcp`), the CLI or REST.
-- **You reach your agents**: tap "Call agent" in the app. The voice AI can consult your
-  own agents (`claude -p …`, scripts) and MCP servers, all listed in one
-  `agents.yaml`. If an agent is slow, the call goes on and its answer arrives when ready.
-- Missed a call? The reason arrives as a message you can answer.
+<!-- demo: phone locked → rings → voice AI explains → answer → agent continues -->
+
+> **Pre-release.** Messages, calls on a locked phone, the voice AI, calling your agent
+> from the app and the MCP server all work. So far it has been tested on one phone
+> (Pixel 6, Android 16). Android only for now.
+
+## What it does
+
+- **Your agent reaches you.** It can send you a message, wait for your reply or call
+  you (`send_message`, `get_replies`, `call`). On a call, a voice AI explains why the
+  agent is calling, answers your questions and hands the transcript back.
+- **You reach your agents.** Tap "Call agent" in the app. The voice AI can ask your own
+  agents for help mid-call. If one is slow, the call goes on and its answer arrives
+  when it's ready, or as a message if you've already hung up.
+- **Nothing gets lost.** A missed call turns into a message you can answer from the
+  notification.
+
+Things people use it for: *"run the migration and call me if anything fails"*, *"ask
+me before you deploy"*, *"what did CI say?"* while driving, a daily call with your
+assistant about your inbox.
+
+## Works with your agent
+
+agentring doesn't care which harness you use: anything that speaks MCP can reach you,
+and anything you can run as a command can be consulted from a call.
+
+| | Reaches you | You consult it from a call |
+|---|---|---|
+| Claude Code | MCP | `claude -p` |
+| Codex | MCP | `codex exec` |
+| opencode | MCP | `opencode run` |
+| OpenClaw | MCP | `openclaw agent` |
+| Hermes | MCP | `hermes -z` |
+| n8n, scripts, anything with HTTP | REST API, CLI | any command, or a small script for an HTTP agent |
+
+Copy-paste setup for each: [docs/agents.md](docs/agents.md#recipes-by-harness).
 
 ## How it works
 
 ```
- agent ──MCP/CLI──▶ daemon ──WSS (outbound only)──▶ relay ──FCM push──▶ Android app
-   ▲                  │                    (your server, TLS)               │
-   └─ agents.yaml ◀── voice AI (Gemini Live) ◀──── LiveKit (call audio) ────┘
+ your agent ──MCP/CLI──▶ daemon ──WSS (outbound only)──▶ relay ──FCM push──▶ Android app
+     ▲                     │                      (your server)                   │
+     └── agents.yaml ◀── voice AI (Gemini Live) ◀───── LiveKit (call audio) ───────┘
 ```
 
-- **relay** (`/relay`, TypeScript): pairing, messages, call state, event log, push,
-  LiveKit tokens. On your server, behind Caddy.
-- **LiveKit**: the call audio (self-hosted, same compose file).
-- **daemon** (`/daemon`, Python): the `agentring` CLI, the MCP server and the voice AI.
-  Runs next to your agents, even behind NAT.
-- **app** (`/app-android`, Kotlin): QR pairing, native call screen, messages.
+- **relay** (TypeScript): pairing, messages, call state, push, LiveKit tokens. Runs on
+  your server behind Caddy.
+- **LiveKit**: the call audio, self-hosted in the same compose file.
+- **daemon** (Python): the `agentring` CLI, the MCP server and the voice AI. Runs next
+  to your agents, behind NAT is fine.
+- **Android app** (Kotlin): QR pairing, the native call screen, messages.
 
-Details: [architecture](docs/architecture.md) · [protocol](docs/protocol.md) ·
-contract: [`protocol/relay.openapi.yaml`](protocol/relay.openapi.yaml)
+The voice AI is the voice, your agent is the brain: Gemini Live handles the
+conversation in real time and hands real work to your agents.
+
+More: [architecture](docs/architecture.md) · [protocol](docs/protocol.md) ·
+[voice AI](docs/voice.md)
 
 ## Quickstart
 
-You need a Linux server with Docker and a domain name, a free Firebase project for
-push ([docs/firebase.md](docs/firebase.md)), and, for the voice AI, a Gemini API key
-(free tier: https://aistudio.google.com/apikey). Full guide: **[docs/setup.md](docs/setup.md)**.
+You need:
+- a Linux server with Docker and a domain name,
+- a free Firebase project for push ([docs/firebase.md](docs/firebase.md)),
+- a Gemini API key for the voice AI ([free tier](https://aistudio.google.com/apikey)),
+- an Android phone.
 
 ```bash
-# server: ports 80, 443, UDP 50000-50100 and TCP 7881 open
+# 1. Server: open ports 80, 443, UDP 50000-50100 and TCP 7881
 cd deploy && cp .env.example .env && $EDITOR .env && docker compose up -d --build
 docker compose logs relay | grep -A2 "API key"
 
-# your computer
+# 2. Your computer
 uv tool install './daemon[voice]'
 agentring init --relay https://relay.example.com --api-key ak_...
-agentring pair                                  # scan the QR with the app
-agentring msg "hola"
+agentring pair                         # scan the QR code with the app
+agentring msg "hello"                  # the phone gets a notification
 echo GEMINI_API_KEY=... >> ~/.agentring/.env
 agentring call "Testing agentring" --ai
 
-# your agent (Claude Code here; Codex, opencode, OpenClaw, Hermes: docs/agents.md)
+# 3. Your agent (Claude Code here; others: docs/agents.md)
 claude mcp add agentring -- agentring mcp
 ```
 
-Phone APK: [android-preview release](https://github.com/mutonby/agentring/releases/tag/android-preview).
+Get the app from [Releases](https://github.com/mutonby/agentring/releases). Step by
+step, including a LAN-only setup for testing: **[docs/setup.md](docs/setup.md)**.
 
-Then: [connect your agents](docs/agents.md) · [voice AI options](docs/voice.md) ·
-[examples](examples/) · [phones that don't ring](docs/troubleshooting-oem.md)
+If the phone doesn't ring when locked, it's usually the vendor's battery saver:
+[docs/troubleshooting-oem.md](docs/troubleshooting-oem.md).
 
-## Privacy in one paragraph
+## Privacy and security
 
-Messages and call metadata are stored on your relay. Push notifications go through
-your own Firebase project; they are signed, not encrypted, so Google's FCM can read
-pushed text. Call audio goes through your LiveKit server; with `--ai` it is sent to
-the voice model's provider (Gemini). On Google's free tier, Google may use that data
-to improve its products. More in [SECURITY.md](SECURITY.md).
+Everything runs on your own servers and accounts. Messages and call metadata are stored
+on your relay. Push notifications go through your own Firebase project; they are
+signed, not encrypted, so Google's FCM can read pushed text. Call audio goes through
+your LiveKit server and, with the voice AI, to Gemini; on Google's free tier, Google may
+use that data to improve its products.
+
+Over the phone, the voice AI acts on what it hears, so give it only the tools and
+agents you'd trust someone holding your phone with. Details and the threat model:
+[SECURITY.md](SECURITY.md).
+
+## Limitations
+
+- Android only (no iOS yet).
+- One user per relay: no accounts.
+- The voice AI uses Gemini Live; other realtime backends plug in through
+  [`RealtimeBackend`](docs/voice.md).
 
 ## Development
 
@@ -86,4 +133,4 @@ relay. See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/release.md](docs/release
 
 ## License
 
-Apache-2.0
+[Apache-2.0](LICENSE)

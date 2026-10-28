@@ -1,0 +1,33 @@
+# Weekly, grouped updates. `cooldown` skips releases younger than 14 days, the same
+# age rule we follow by hand (CONTRIBUTING.md). Check the lockfiles against
+# OSV before merging.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}
+    cooldown: {default-days: 14}
+    groups: {actions: {patterns: ["*"]}}
+
+  - package-ecosystem: npm
+    directory: /relay
+    schedule: {interval: weekly}
+    cooldown: {default-days: 14}
+    groups: {relay: {patterns: ["*"]}}
+
+  - package-ecosystem: uv
+    directory: /daemon
+    schedule: {interval: weekly}
+    cooldown: {default-days: 14}
+    groups: {daemon: {patterns: ["*"]}}
+
+  - package-ecosystem: gradle
+    directory: /app-android
+    schedule: {interval: weekly}
+    cooldown: {default-days: 14}
+    groups: {android: {patterns: ["*"]}}
+
+  - package-ecosystem: docker-compose
+    directory: /deploy
+    schedule: {interval: weekly}
+    cooldown: {default-days: 14}

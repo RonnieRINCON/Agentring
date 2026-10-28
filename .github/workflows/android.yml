@@ -12,37 +12,43 @@ concurrency:
 env:
   CI_API_KEY: ak_ci_test_key
 
+# Actions are pinned by commit SHA (comment = release tag); bump them deliberately.
+permissions:
+  contents: read
+
 jobs:
   build-and-e2e:
     name: Build APK + emulator end-to-end
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: gradle/actions/wrapper-validation@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: 17
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4.4.4
 
       - name: Build APK and unit tests
         working-directory: app-android
-        run: ./gradlew --stacktrace :core:test :app:assembleDebug :app:assembleDebugAndroidTest
+        run: ./gradlew --stacktrace :core:test :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease
 
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: agentring-apk
-          path: app-android/app/build/outputs/apk/debug/app-debug.apk
+          # The release build type (not debuggable), still signed with the public debug key.
+          path: app-android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: relay/package-lock.json
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
 
       - name: Start relay
         run: |
@@ -68,7 +74,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
 
       - name: Emulator end-to-end
-        uses: reactivecircus/android-emulator-runner@v2
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: 34
           target: google_apis
@@ -91,7 +97,7 @@ jobs:
 
       - name: Upload screenshots and logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: e2e-results
           path: |
@@ -104,12 +110,12 @@ jobs:
   publish-apk:
     name: Publish APK (android-preview release)
     needs: build-and-e2e
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: agentring-apk
       - name: Replace the android-preview pre-release
@@ -117,9 +123,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          mv app-debug.apk agentring.apk
+          mv app-release.apk agentring.apk
           gh release delete android-preview --cleanup-tag --yes || true
           gh release create android-preview agentring.apk \
             --prerelease --target "$GITHUB_SHA" \
             --title "Android preview (${GITHUB_REF_NAME}, ${GITHUB_SHA::7})" \
-            --notes "Debug build of the agentring Android app from ${GITHUB_SHA}. Passed the emulator end-to-end test. Install agentring.apk on your phone (allow installs from unknown sources)."
+            --notes "Preview build of the agentring Android app from ${GITHUB_SHA}, signed with the public debug key (see SECURITY.md). Passed the emulator end-to-end test. Install agentring.apk on your phone (allow installs from unknown sources)."

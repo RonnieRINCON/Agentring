@@ -14,3 +14,15 @@ local.properties
 google-services.json
 .DS_Store
 uv.lock.bak
+
+# Never commit signing keys, credentials or local env files
+*.jks
+*.keystore
+!app-android/app/debug.keystore
+*.p12
+*.pem
+*.key
+.env.*
+!.env.example
+service-account*.json
+*-firebase-adminsdk-*.json

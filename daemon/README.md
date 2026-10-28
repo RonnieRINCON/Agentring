@@ -14,5 +14,5 @@ claude mcp add agentring -- agentring mcp
 ```
 
 You need your own relay (self-hosted, Docker compose) and the Android app. See the
-[setup guide](https://github.com/mutonby/agentring/blob/claude/agentring-voip-calls-l4ei3s/docs/setup.md)
-and [connecting agents](https://github.com/mutonby/agentring/blob/claude/agentring-voip-calls-l4ei3s/docs/agents.md).
+[setup guide](https://github.com/mutonby/agentring/blob/main/docs/setup.md)
+and [connecting agents](https://github.com/mutonby/agentring/blob/main/docs/agents.md).

@@ -122,10 +122,11 @@ with that text, so configure it with the least privilege that works.
 
 `app-android/app/debug.keystore` is committed on purpose (with the standard
 `android` passwords) so CI builds install over each other. It is a public key
-pair and offers no protection. Note that the `android-preview` APK is signed
-with it, and so is the `release` build type until a real release key is set up:
-anyone can build an APK that installs as an update over a preview install and
-reads its stored credentials. Install the app only from a source you trust.
+pair and offers no protection. The `android-preview` APK is the `release` build
+type (not debuggable) but is signed with this key, as is any release build until
+a real release key is set up: anyone can build an APK that installs as an update
+over a preview install and reads its stored credentials. Install the app only from
+a source you trust, and prefer a tagged release (signed with the release key).
 
 ### Out of scope
 

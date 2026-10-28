@@ -17,8 +17,9 @@ self-hosted, no accounts.
 - The protocol contract is `protocol/relay.openapi.yaml` (single source of
   truth). Change it first, then the implementations, and keep
   `protocol/examples/` fixtures valid.
-- Develop on branch `claude/agentring-voip-calls-l4ei3s` (currently also the
-  repo's default branch). Commit with clear messages; don't open PRs unless asked.
+- Develop on `main` (the default branch; renamed from
+  `claude/agentring-voip-calls-l4ei3s`). Commit with clear messages; don't open PRs
+  unless asked. Only `main` pushes replace the `android-preview` APK.
 
 ## Status
 
