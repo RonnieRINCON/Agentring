@@ -68,12 +68,14 @@ Copy-paste setup for each: [docs/agents.md](docs/agents.md#recipes-by-harness).
 - **daemon** (Python): the `agentring` CLI, the MCP server and the voice AI. Runs next
   to your agents, behind NAT is fine.
 - **Android app** (Kotlin): QR pairing, the native call screen, messages.
+- **Browser client** (served by the relay at `/web/`): answer and place calls from a
+  desktop browser while the tab is open, no app needed ([docs/web-client.md](docs/web-client.md)).
 
 The voice AI is the voice, your agent is the brain: Gemini Live handles the
 conversation in real time and hands real work to your agents.
 
 More: [architecture](docs/architecture.md) · [protocol](docs/protocol.md) ·
-[voice AI](docs/voice.md)
+[voice AI](docs/voice.md) · [browser client](docs/web-client.md)
 
 ## Quickstart
 
